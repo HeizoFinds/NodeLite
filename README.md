@@ -84,12 +84,20 @@ target/aarch64-unknown-linux-musl/release/ximonitor-agent
 curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/install-server.sh | sudo sh
 ```
 
+同一条命令以后也可以直接拿来升级。脚本会自动识别现有安装，并默认切到 `upgrade` 模式；如果你想强制指定，也可以：
+
+```bash
+curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/install-server.sh | \
+  sudo XIMONITOR_SERVER_MODE=upgrade sh
+```
+
 脚本默认会：
 
 - 把程序数据放到你输入的安装目录下，默认建议 `/opt/ximonitor`
 - 监听在 `127.0.0.1:<随机端口>`
 - 要求你输入对外访问的域名或 IP，并据此生成 `public_base_url`
 - 生成一组只读面板 Basic Auth 账号
+- 如果是升级，会自动读取现有配置作为默认值，并把缺失字段补回当前模板
 
 安装完成后会直接打印：
 
@@ -240,7 +248,7 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
 说明：
 
 - 脚本会检测架构并下载对应的 `ximonitor-agent-<target>` 二进制
-- 脚本会自动下载 GitHub Release 的 `SHA256SUMS.txt`，并按当前架构校验 agent 二进制
+- 脚本会先把 GitHub `latest` 解析成具体 tag，再下载同一个 release 下的 `SHA256SUMS.txt` 和 agent 二进制，避免刚发版时 CDN 短时间不一致
 - 一次性 install token 已经内联在命令里，所以正常情况下不需要再手工输入
 - 长期 node token 只通过 bootstrap 响应体下发，不出现在 URL 或命令参数里
 - 会创建 `ximonitor-agent` 专用系统用户，并以该用户运行 systemd service
@@ -272,6 +280,23 @@ sh scripts/install-agent.sh \
   --install-token <one-time-token> \
   --base-url https://github.com/XiNian-dada/XiMonitor/releases/latest/download
 ```
+
+如果这台子机已经装过了，后续升级可以更简单，不需要重新拿 bootstrap：
+
+```bash
+curl -fsSL https://monitor.example.com/install/install-agent.sh | \
+  XIMONITOR_AGENT_MODE=upgrade sh -s -- \
+  --base-url https://github.com/XiNian-dada/XiMonitor/releases/latest/download
+```
+
+升级模式会：
+
+- 只替换 agent 二进制
+- 重写并补齐 systemd service
+- 保留现有 `/etc/ximonitor/agent.toml`
+- 自动修正目录和文件权限
+
+如果你在升级时也传了 `--bootstrap-url` 和 install token，它会顺手刷新 agent 配置。
 
 如果你已经有精确二进制地址，也可以继续使用自定义下载地址和校验文件：
 
