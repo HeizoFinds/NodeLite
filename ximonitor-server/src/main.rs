@@ -196,7 +196,6 @@ async fn run_server(config_path: &Path) -> Result<()> {
     let protected_routes = Router::new()
         .route("/", get(index))
         .route("/nodes/{node_id}", get(node_detail))
-        .route("/install/install-agent.sh", get(install_agent_script))
         .route("/api/bootstrap", get(bootstrap))
         .route("/api/overview", get(overview))
         .route("/api/nodes", get(nodes))
@@ -208,6 +207,10 @@ async fn run_server(config_path: &Path) -> Result<()> {
         ));
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route(
+            "/install/{node_id}/{token}/install-agent.sh",
+            get(install_agent_script),
+        )
         .route("/ws", get(ws_handler))
         .merge(protected_routes)
         .with_state(state)
@@ -245,13 +248,12 @@ async fn issue_node_command(config_path: &Path, args: IssueNodeArgs) -> Result<(
     let install_command = render_install_command(
         &config.public_base_url,
         &issued.node,
-        config.readonly_auth.as_ref(),
         config.agent_release_base_url.as_deref(),
         config.agent_release_sha256_x86_64.as_deref(),
         config.agent_release_sha256_aarch64.as_deref(),
     )?;
     let agent_config = render_agent_config(&config.public_base_url, &issued.node)?;
-    let install_script_url = build_install_script_url(&config.public_base_url)?;
+    let install_script_url = build_install_script_url(&config.public_base_url, &issued.node)?;
     let action = if issued.created {
         "created"
     } else if issued.rotated_token {
@@ -353,11 +355,19 @@ async fn bootstrap(State(state): State<AppState>) -> impl IntoResponse {
     })
 }
 
-async fn install_agent_script() -> impl IntoResponse {
+async fn install_agent_script(
+    State(state): State<AppState>,
+    AxumPath((node_id, token)): AxumPath<(String, String)>,
+) -> Response {
+    if !state.registry.is_token_current(&node_id, &token).await {
+        return (StatusCode::UNAUTHORIZED, "invalid install token").into_response();
+    }
+
     (
         [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
         INSTALL_AGENT_SCRIPT,
     )
+        .into_response()
 }
 
 async fn overview(State(state): State<AppState>) -> impl IntoResponse {
@@ -736,7 +746,10 @@ mod tests {
             .route("/", get(index))
             .route("/nodes/{node_id}", get(node_detail))
             .route("/healthz", get(healthz))
-            .route("/install/install-agent.sh", get(install_agent_script))
+            .route(
+                "/install/{node_id}/{token}/install-agent.sh",
+                get(install_agent_script),
+            )
             .route("/api/bootstrap", get(bootstrap))
             .route("/api/overview", get(overview))
             .route("/api/nodes", get(nodes))

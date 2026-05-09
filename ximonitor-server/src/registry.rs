@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::RwLock;
 use url::Url;
-use ximonitor_proto::{NodeIdentity, ReadonlyAuthConfig};
+use ximonitor_proto::NodeIdentity;
 
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -197,10 +197,13 @@ pub fn build_agent_server_url(public_base_url: &str) -> Result<String> {
     Ok(url.into())
 }
 
-pub fn build_install_script_url(public_base_url: &str) -> Result<String> {
+pub fn build_install_script_url(public_base_url: &str, node: &RegisteredNode) -> Result<String> {
     let mut url = Url::parse(public_base_url)
         .with_context(|| "invalid server.public_base_url".to_string())?;
-    url.set_path("/install/install-agent.sh");
+    url.set_path(&format!(
+        "/install/{}/{}/install-agent.sh",
+        node.node_id, node.token
+    ));
     url.set_query(None);
     url.set_fragment(None);
     Ok(url.into())
@@ -209,26 +212,14 @@ pub fn build_install_script_url(public_base_url: &str) -> Result<String> {
 pub fn render_install_command(
     public_base_url: &str,
     node: &RegisteredNode,
-    readonly_auth: Option<&ReadonlyAuthConfig>,
     agent_release_base_url: Option<&str>,
     agent_release_sha256_x86_64: Option<&str>,
     agent_release_sha256_aarch64: Option<&str>,
 ) -> Result<String> {
-    let script_url = build_install_script_url(public_base_url)?;
+    let script_url = build_install_script_url(public_base_url, node)?;
     let server_url = build_agent_server_url(public_base_url)?;
-    let mut curl_command = "curl -fsSL".to_string();
-    if let Some(readonly_auth) = readonly_auth {
-        curl_command.push_str(&format!(
-            " --user {}",
-            shell_quote(&format!(
-                "{}:{}",
-                readonly_auth.username, readonly_auth.password
-            ))
-        ));
-    }
-
     let mut lines = vec![
-        format!("{curl_command} {} | sh -s -- \\", shell_quote(&script_url)),
+        format!("curl -fsSL {} | sh -s -- \\", shell_quote(&script_url)),
         format!("  --server {} \\", shell_quote(&server_url)),
         format!("  --node-id {} \\", shell_quote(&node.node_id)),
         format!("  --node-label {} \\", shell_quote(&node.node_label)),
@@ -501,7 +492,7 @@ mod tests {
         IssueNodeRequest, NodeRegistry, RegisteredNode, RegistryFile, build_agent_server_url,
         issue_node, render_install_command,
     };
-    use ximonitor_proto::{NodeIdentity, ReadonlyAuthConfig};
+    use ximonitor_proto::NodeIdentity;
 
     #[test]
     fn agent_server_url_uses_wss_for_https() {
@@ -592,18 +583,14 @@ mod tests {
             let command = render_install_command(
                 "https://monitor.example.com",
                 &issued.node,
-                Some(&ReadonlyAuthConfig {
-                    username: "viewer".to_string(),
-                    password: "secret".to_string(),
-                }),
                 Some("https://downloads.example.com/releases/latest/download"),
                 Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
                 Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"),
             )
             .expect("install command should render");
             assert!(command.contains("--token"));
-            assert!(command.contains("/install/install-agent.sh"));
-            assert!(command.contains("--user"));
+            assert!(command.contains("/hk-01/"));
+            assert!(command.contains("/install-agent.sh"));
             assert!(command.contains("--sha256-x86_64"));
 
             let _ = std::fs::remove_file(&path);

@@ -152,7 +152,7 @@ scripts/install-agent.sh
 示例：
 
 ```bash
-curl -fsSL --user 'viewer:change-this-password' https://monitor.example.com/install/install-agent.sh | sh -s -- \
+curl -fsSL https://monitor.example.com/install/hk-01/NODE_TOKEN/install-agent.sh | sh -s -- \
   --server wss://monitor.example.com/ws \
   --node-id hk-01 \
   --token YOUR_TOKEN \
@@ -165,6 +165,7 @@ curl -fsSL --user 'viewer:change-this-password' https://monitor.example.com/inst
 
 - 脚本会检测架构并下载对应的 `ximonitor-agent-<target>` 二进制
 - 脚本会按当前架构校验服务端签发的 SHA-256，校验失败会直接终止
+- `issue-node` 打印出的安装链接已经是节点级安装 token，不需要再把面板 Basic Auth 凭据拼进 `curl`
 - 会写入 `/etc/ximonitor/agent.toml`，并将权限收紧到 `0600`
 - 会生成 `ximonitor-agent.service`
 - 会执行 `daemon-reload`、`enable` 和 `restart`
@@ -182,7 +183,7 @@ sh scripts/install-agent.sh \
 ## 说明
 
 - 网页端默认只读，不提供写配置入口。
-- `/healthz` 和 `/ws` 不走只读面板鉴权；面板、JSON API 和安装脚本走 HTTP Basic Auth。
+- `/healthz` 和 `/ws` 不走只读面板鉴权；面板和 JSON API 走 HTTP Basic Auth；安装脚本改为节点级 token URL。
 - agent 只接受服务端 `server.json` 中已登记节点的逐节点 token；旧的 `shared_token` 即使仍出现在配置里，也不会再绕过注册表。
 - 首版 agent 只支持 Linux。
 - 当前历史图保存基础趋势，不做长期归档。
