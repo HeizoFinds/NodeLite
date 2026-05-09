@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 authors = ["XiMonitor Contributors"]
-repository = "https://example.invalid/XiMonitor"
+repository = "https://github.com/XiNian-dada/XiMonitor"
 
 [workspace.dependencies]
 anyhow = "1.0"

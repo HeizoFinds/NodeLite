@@ -37,8 +37,8 @@ use ximonitor_proto::{
 
 use crate::history::HistoryStore;
 use crate::registry::{
-    IssueNodeRequest, NodeRegistry, build_install_script_url, issue_node, render_agent_config,
-    render_install_command,
+    IssueNodeRequest, NodeRegistry, build_install_script_url, default_agent_release_base_url,
+    issue_node, render_agent_config, render_install_command,
 };
 use crate::snapshot::{load_snapshot, spawn_snapshot_persistor};
 use crate::state::SharedState;
@@ -56,11 +56,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    IssueNode(IssueNodeArgs),
+    IssueNode(NodeCommandArgs),
+    InstallAgent(NodeCommandArgs),
 }
 
-#[derive(Debug, Parser)]
-struct IssueNodeArgs {
+#[derive(Debug, Parser, Clone)]
+struct NodeCommandArgs {
     #[arg(long)]
     node_id: String,
     #[arg(long)]
@@ -91,6 +92,13 @@ struct BootstrapResponse {
     public_base_url: String,
     refresh_interval_secs: u64,
     registered_nodes: usize,
+}
+
+struct IssuedNodeBundle {
+    issued: crate::registry::IssueNodeResult,
+    install_command: String,
+    install_script_url: String,
+    agent_release_base_url: String,
 }
 
 #[derive(Debug)]
@@ -264,6 +272,9 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::IssueNode(args)) => issue_node_command(cli.config.as_path(), args).await,
+        Some(Command::InstallAgent(args)) => {
+            install_agent_command(cli.config.as_path(), args).await
+        }
         None => run_server(cli.config.as_path()).await,
     }
 }
@@ -345,61 +356,75 @@ async fn run_server(config_path: &Path) -> Result<()> {
     .context("server exited unexpectedly")
 }
 
-async fn issue_node_command(config_path: &Path, args: IssueNodeArgs) -> Result<()> {
+async fn issue_node_command(config_path: &Path, args: NodeCommandArgs) -> Result<()> {
     let config = load_server_config(config_path).await?;
-    let issued = issue_node(
-        config.node_registry_path.as_path(),
-        IssueNodeRequest {
-            node_id: args.node_id,
-            node_label: args.node_label,
-            tags: args.tags,
-            rotate_token: args.rotate_token,
-        },
-    )
-    .await?;
-
-    let install_command = render_install_command(
-        &config.public_base_url,
-        config.agent_release_base_url.as_deref(),
-        config.agent_release_sha256_x86_64.as_deref(),
-        config.agent_release_sha256_aarch64.as_deref(),
-    )?;
-    let agent_config = render_agent_config(&config.public_base_url, &issued.node)?;
-    let install_script_url = build_install_script_url(&config.public_base_url)?;
-    let action = if issued.created {
+    let bundle = issue_node_bundle(&config, &args).await?;
+    let agent_config = render_agent_config(&config.public_base_url, &bundle.issued.node)?;
+    let action = if bundle.issued.created {
         "created"
-    } else if issued.rotated_token {
+    } else if bundle.issued.rotated_token {
         "rotated"
     } else {
         "reused"
     };
 
-    println!("node_id: {}", issued.node.node_id);
-    println!("node_label: {}", issued.node.node_label);
+    println!("node_id: {}", bundle.issued.node.node_id);
+    println!("node_label: {}", bundle.issued.node.node_label);
     println!("status: {action}");
     println!("registry_path: {}", config.node_registry_path.display());
-    println!("install_script_url: {install_script_url}");
-    println!("install_token: {}", issued.install_token);
+    println!("install_script_url: {}", bundle.install_script_url);
+    println!("agent_release_base_url: {}", bundle.agent_release_base_url);
     println!(
         "install_token_expires_at: {}",
-        issued.install_token_expires_at.to_rfc3339()
+        bundle.issued.install_token_expires_at.to_rfc3339()
     );
     println!();
     println!("# agent.toml");
     println!("{agent_config}");
     println!("# install command");
-    println!("{install_command}");
+    println!("{}", bundle.install_command);
     println!();
-    println!("note: the installer will prompt for the one-time install token shown above.");
-
-    if config.agent_release_base_url.is_none() {
-        println!();
-        println!(
-            "note: set [install].agent_release_base_url in server.toml to print a fully self-contained install command."
-        );
-    }
+    println!("note: the install command above already embeds a one-time install token.");
 
     Ok(())
+}
+
+async fn install_agent_command(config_path: &Path, args: NodeCommandArgs) -> Result<()> {
+    let config = load_server_config(config_path).await?;
+    let bundle = issue_node_bundle(&config, &args).await?;
+    println!("{}", bundle.install_command);
+    Ok(())
+}
+
+async fn issue_node_bundle(
+    config: &ServerConfig,
+    args: &NodeCommandArgs,
+) -> Result<IssuedNodeBundle> {
+    let issued = issue_node(
+        config.node_registry_path.as_path(),
+        IssueNodeRequest {
+            node_id: args.node_id.clone(),
+            node_label: args.node_label.clone(),
+            tags: args.tags.clone(),
+            rotate_token: args.rotate_token,
+        },
+    )
+    .await?;
+
+    let agent_release_base_url = default_agent_release_base_url()?;
+    let install_command = render_install_command(
+        &config.public_base_url,
+        &issued.install_token,
+        &agent_release_base_url,
+    )?;
+    let install_script_url = build_install_script_url(&config.public_base_url)?;
+
+    Ok(IssuedNodeBundle {
+        issued,
+        install_command,
+        install_script_url,
+        agent_release_base_url,
+    })
 }
 
 async fn load_server_config(path: &Path) -> Result<ServerConfig> {

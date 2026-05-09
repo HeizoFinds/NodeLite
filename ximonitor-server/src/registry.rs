@@ -256,40 +256,57 @@ pub fn build_install_bootstrap_url(public_base_url: &str) -> Result<String> {
     Ok(url.into())
 }
 
+pub fn build_github_release_base_url(repository_url: &str) -> Result<String> {
+    let url = Url::parse(repository_url).with_context(|| "invalid repository URL".to_string())?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("repository URL must include a host"))?;
+    if host != "github.com" {
+        bail!("only GitHub repositories are supported for latest release installs");
+    }
+
+    let mut segments = url
+        .path_segments()
+        .ok_or_else(|| anyhow!("repository URL must include an owner and repo"))?;
+    let owner = segments
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("repository URL must include an owner"))?
+        .to_string();
+    let repo = segments
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("repository URL must include a repo"))?
+        .trim_end_matches(".git")
+        .to_string();
+
+    let mut release_url = url;
+    release_url.set_path(&format!("{owner}/{repo}/releases/latest/download"));
+    release_url.set_query(None);
+    release_url.set_fragment(None);
+    Ok(release_url.into())
+}
+
+pub fn default_agent_release_base_url() -> Result<String> {
+    build_github_release_base_url(env!("CARGO_PKG_REPOSITORY"))
+}
+
 pub fn render_install_command(
     public_base_url: &str,
-    agent_release_base_url: Option<&str>,
-    agent_release_sha256_x86_64: Option<&str>,
-    agent_release_sha256_aarch64: Option<&str>,
+    install_token: &str,
+    agent_release_base_url: &str,
 ) -> Result<String> {
     let script_url = build_install_script_url(public_base_url)?;
     let bootstrap_url = build_install_bootstrap_url(public_base_url)?;
-    let mut lines = vec![
-        format!("curl -fsSL {} | sh -s -- \\", shell_quote(&script_url)),
-        format!("  --bootstrap-url {}", shell_quote(&bootstrap_url)),
+    let lines = [
+        format!("curl -fsSL {} | \\", shell_quote(&script_url)),
+        format!(
+            "  XIMONITOR_AGENT_INSTALL_TOKEN={} sh -s -- \\",
+            shell_quote(install_token)
+        ),
+        format!("  --bootstrap-url {} \\", shell_quote(&bootstrap_url)),
+        format!("  --base-url {}", shell_quote(agent_release_base_url)),
     ];
-
-    if let Some(agent_release_base_url) = agent_release_base_url {
-        let Some(agent_release_sha256_x86_64) = agent_release_sha256_x86_64 else {
-            bail!("missing x86_64 agent checksum for install command");
-        };
-        let Some(agent_release_sha256_aarch64) = agent_release_sha256_aarch64 else {
-            bail!("missing aarch64 agent checksum for install command");
-        };
-        lines[1].push_str(" \\");
-        lines.push(format!(
-            "  --base-url {} \\",
-            shell_quote(agent_release_base_url)
-        ));
-        lines.push(format!(
-            "  --sha256-x86_64 {} \\",
-            shell_quote(agent_release_sha256_x86_64)
-        ));
-        lines.push(format!(
-            "  --sha256-aarch64 {}",
-            shell_quote(agent_release_sha256_aarch64)
-        ));
-    }
 
     Ok(lines.join("\n"))
 }
@@ -593,7 +610,8 @@ mod tests {
 
     use super::{
         IssueNodeRequest, NodeRegistry, RegisteredNode, RegistryFile, build_agent_server_url,
-        issue_node, render_install_command,
+        build_github_release_base_url, default_agent_release_base_url, issue_node,
+        render_install_command,
     };
     use ximonitor_proto::NodeIdentity;
 
@@ -688,16 +706,15 @@ mod tests {
 
             let command = render_install_command(
                 "https://monitor.example.com",
-                Some("https://downloads.example.com/releases/latest/download"),
-                Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
-                Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"),
+                &issued.install_token,
+                "https://github.com/XiNian-dada/XiMonitor/releases/latest/download",
             )
             .expect("install command should render");
             assert!(command.contains("--bootstrap-url"));
             assert!(command.contains("/install-agent.sh"));
-            assert!(command.contains("--sha256-x86_64"));
+            assert!(command.contains("XIMONITOR_AGENT_INSTALL_TOKEN="));
+            assert!(command.contains(&issued.install_token));
             assert!(!command.contains(&issued.node.token));
-            assert!(!command.contains(&issued.install_token));
 
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_dir(&temp_dir);
@@ -885,5 +902,26 @@ mod tests {
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_dir(&temp_dir);
         });
+    }
+
+    #[test]
+    fn github_release_base_url_uses_latest_download_path() {
+        let release_url =
+            build_github_release_base_url("https://github.com/XiNian-dada/XiMonitor.git")
+                .expect("release url should build");
+        assert_eq!(
+            release_url,
+            "https://github.com/XiNian-dada/XiMonitor/releases/latest/download"
+        );
+    }
+
+    #[test]
+    fn default_release_base_url_points_at_github_latest_download() {
+        let release_url =
+            default_agent_release_base_url().expect("default release url should build");
+        assert_eq!(
+            release_url,
+            "https://github.com/XiNian-dada/XiMonitor/releases/latest/download"
+        );
     }
 }
