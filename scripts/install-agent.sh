@@ -16,6 +16,7 @@ INSTALL_TOKEN="${XIMONITOR_AGENT_INSTALL_TOKEN:-}"
 INSTALL_TOKEN_FILE="${XIMONITOR_AGENT_INSTALL_TOKEN_FILE:-}"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/ximonitor"
+MODE="${XIMONITOR_AGENT_MODE:-auto}"
 BASE_URL="${XIMONITOR_AGENT_BASE_URL:-https://github.com/XiNian-dada/XiMonitor/releases/latest/download}"
 CHECKSUMS_URL="${XIMONITOR_AGENT_CHECKSUMS_URL:-}"
 BINARY_URL="${XIMONITOR_AGENT_BINARY_URL:-}"
@@ -213,6 +214,11 @@ while [ "$#" -gt 0 ]; do
       CONFIG_DIR="$2"
       shift 2
       ;;
+    --mode)
+      [ "$#" -ge 2 ] || fail "--mode requires a value"
+      MODE="$2"
+      shift 2
+      ;;
     --base-url)
       [ "$#" -ge 2 ] || fail "--base-url requires a value"
       BASE_URL="$2"
@@ -249,6 +255,7 @@ Optional:
   --install-token-file <path>
   --install-dir <dir>
   --config-dir <dir>
+  --mode <install|upgrade|auto>
   --base-url <release-base-url>
   --checksums-url <release-checksums-url>
   --binary-url <exact-binary-url>
@@ -264,7 +271,6 @@ EOF
 done
 
 [ "$(id -u)" -eq 0 ] || fail "please run as root"
-[ -n "$BOOTSTRAP_URL" ] || fail "missing --bootstrap-url"
 
 need_cmd uname
 need_cmd curl
@@ -308,6 +314,30 @@ fi
 BIN_PATH="$INSTALL_DIR/ximonitor-agent"
 CONFIG_PATH="$CONFIG_DIR/agent.toml"
 
+existing_install=0
+if [ -e "$CONFIG_PATH" ] || [ -e "$UNIT_PATH" ] || [ -e "$BIN_PATH" ]; then
+  existing_install=1
+fi
+
+case "$MODE" in
+  auto)
+    if [ "$existing_install" -eq 1 ]; then
+      MODE="upgrade"
+    else
+      MODE="install"
+    fi
+    ;;
+  install|upgrade)
+    ;;
+  *)
+    fail "--mode must be one of: install, upgrade, auto"
+    ;;
+esac
+
+if [ "$MODE" = "install" ] && [ -z "$BOOTSTRAP_URL" ]; then
+  fail "install mode requires --bootstrap-url"
+fi
+
 ensure_service_account
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$STATE_DIR"
@@ -321,7 +351,14 @@ BOOTSTRAP_TMP="$(mktemp "$CONFIG_DIR/agent.toml.XXXXXX")"
 CURL_AUTH_CONFIG="$(mktemp "$STATE_DIR/install-curl.XXXXXX")"
 CHECKSUMS_TMP="$(mktemp "$STATE_DIR/install-sha256.XXXXXX")"
 
-fetch_bootstrap_config
+config_refreshed=0
+if [ "$MODE" = "install" ] || [ -n "$BOOTSTRAP_URL" ]; then
+  fetch_bootstrap_config
+  config_refreshed=1
+elif [ ! -f "$CONFIG_PATH" ]; then
+  fail "upgrade mode requires an existing $CONFIG_PATH or a bootstrap URL to recreate it"
+fi
+
 fetch_expected_sha256 "$ARTIFACT_NAME"
 
 printf '%s\n' "Downloading $DOWNLOAD_URL"
@@ -330,7 +367,12 @@ ACTUAL_SHA256="$(calculate_sha256 "$TMP_PATH")"
 [ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ] || fail "downloaded agent checksum mismatch"
 
 install -o root -g root -m 0755 "$TMP_PATH" "$BIN_PATH"
-install -o root -g "$SERVICE_GROUP" -m 0640 "$BOOTSTRAP_TMP" "$CONFIG_PATH"
+if [ "$config_refreshed" -eq 1 ]; then
+  install -o root -g "$SERVICE_GROUP" -m 0640 "$BOOTSTRAP_TMP" "$CONFIG_PATH"
+else
+  chown root:"$SERVICE_GROUP" "$CONFIG_PATH"
+  chmod 0640 "$CONFIG_PATH"
+fi
 
 cat >"$UNIT_PATH" <<EOF
 [Unit]
@@ -359,6 +401,10 @@ systemctl daemon-reload
 systemctl enable ximonitor-agent.service
 systemctl restart ximonitor-agent.service
 
-printf '%s\n' "XiMonitor agent installed and started."
+if [ "$MODE" = "upgrade" ]; then
+  printf '%s\n' "XiMonitor agent upgraded and restarted."
+else
+  printf '%s\n' "XiMonitor agent installed and started."
+fi
 printf '%s\n' "Config: $CONFIG_PATH"
 printf '%s\n' "Service: ximonitor-agent.service"
