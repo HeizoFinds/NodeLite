@@ -327,7 +327,6 @@ mod imp {
     fn collect_disks(mounts_path: &str) -> Result<Vec<DiskUsage>> {
         let content =
             fs::read_to_string(mounts_path).with_context(|| format!("read {mounts_path}"))?;
-        let ignored = ignored_filesystems();
         let mut seen_mounts = HashSet::new();
         let mut disks = Vec::new();
 
@@ -340,7 +339,9 @@ mod imp {
             let mount_point = unescape_mount_field(fields[1]);
             let fs_type = fields[2].to_string();
 
-            if ignored.contains(fs_type.as_str()) || !seen_mounts.insert(mount_point.clone()) {
+            if ignored_filesystems().contains(&fs_type.as_str())
+                || !seen_mounts.insert(mount_point.clone())
+            {
                 continue;
             }
 
@@ -364,7 +365,7 @@ mod imp {
         Ok(disks)
     }
 
-    fn ignored_filesystems() -> HashSet<&'static str> {
+    fn ignored_filesystems() -> &'static [&'static str] {
         [
             "autofs",
             "bpf",
@@ -386,8 +387,6 @@ mod imp {
             "tmpfs",
             "tracefs",
         ]
-        .into_iter()
-        .collect()
     }
 
     fn unescape_mount_field(value: &str) -> String {

@@ -40,7 +40,7 @@ impl SharedState {
         node_id: &str,
         session_id: u64,
         snapshot: NodeSnapshot,
-    ) -> bool {
+    ) -> Option<NodeStatus> {
         let mut registry = self.registry.write().await;
         registry.update_snapshot(node_id, session_id, snapshot, Utc::now())
     }
@@ -132,18 +132,18 @@ impl Registry {
         session_id: u64,
         snapshot: NodeSnapshot,
         now: DateTime<Utc>,
-    ) -> bool {
+    ) -> Option<NodeStatus> {
         let Some(entry) = self.nodes.get_mut(node_id) else {
-            return false;
+            return None;
         };
         if entry.active_session_id != Some(session_id) {
-            return false;
+            return None;
         }
 
         entry.status.snapshot = Some(snapshot);
         entry.status.last_seen = Some(now);
         entry.status.online = true;
-        true
+        Some(entry.status.clone())
     }
 
     fn update_latency(
@@ -316,13 +316,21 @@ mod tests {
         registry.register_node(1, identity.clone(), now);
         registry.register_node(2, identity, now + ChronoDuration::seconds(3));
 
-        assert!(!registry.update_snapshot("hk-01", 1, sample_snapshot(now), now));
-        assert!(registry.update_snapshot(
-            "hk-01",
-            2,
-            sample_snapshot(now + ChronoDuration::seconds(4)),
-            now
-        ));
+        assert!(
+            registry
+                .update_snapshot("hk-01", 1, sample_snapshot(now), now)
+                .is_none()
+        );
+        assert!(
+            registry
+                .update_snapshot(
+                    "hk-01",
+                    2,
+                    sample_snapshot(now + ChronoDuration::seconds(4)),
+                    now
+                )
+                .is_some()
+        );
     }
 
     #[test]

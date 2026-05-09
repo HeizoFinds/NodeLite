@@ -262,13 +262,11 @@ async fn handle_socket(state: AppState, mut socket: WebSocket) -> Result<(), Pro
                     ParsedFrame::Control => continue,
                     ParsedFrame::Wire(WireMessage::Metrics(MetricsMessage { snapshot })) => {
                         let snapshot = sanitize_snapshot(shared.config(), snapshot);
-                        if !shared.update_snapshot(&node_id, session_id, snapshot).await {
+                        let Some(status) = shared.update_snapshot(&node_id, session_id, snapshot).await else {
                             warn!(node_id = %node_id, session_id, "dropping metrics from superseded session");
                             break Ok(());
-                        }
-                        if let Some(status) = shared.get_status(&node_id).await {
-                            state.history.record_status(&status).await;
-                        }
+                        };
+                        state.history.record_status(&status).await;
                     }
                     ParsedFrame::Wire(WireMessage::Pong(PongMessage { nonce })) => {
                         let Some(sent_at) = outstanding_pings.remove(&nonce) else {
