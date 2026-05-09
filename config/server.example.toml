@@ -12,6 +12,13 @@ max_message_bytes = 65536
 username = "viewer"
 password = "change-this-password"
 
+[ws]
+max_total_connections = 1024
+max_connections_per_ip = 32
+auth_fail_window_secs = 300
+auth_fail_max_attempts = 12
+auth_block_secs = 900
+
 [ui]
 refresh_interval_secs = 5
 

@@ -68,7 +68,7 @@ mkdir -p config
 cp config/server.example.toml config/server.toml
 ```
 
-2. 修改 `config/server.toml` 中的监听地址、`public_base_url`、`node_registry_path`、`[auth]` 用户名密码，以及 `[install]` 里的发布地址和两种架构对应的 SHA-256。
+2. 修改 `config/server.toml` 中的监听地址、`public_base_url`、`node_registry_path`、`[auth]` 用户名密码、`[ws]` 的接入配额与失败限流参数，以及 `[install]` 里的发布地址和两种架构对应的 SHA-256。
 
 3. 准备节点清单文件：
 

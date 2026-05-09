@@ -4,16 +4,18 @@ mod snapshot;
 mod state;
 mod ui;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
+use axum::extract::ConnectInfo;
 use axum::extract::Request;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
@@ -30,7 +32,7 @@ use tracing::{error, info, warn};
 use url::Url;
 use ximonitor_proto::{
     HelloMessage, MetricsMessage, NodeSnapshot, PingMessage, PongMessage, ReadonlyAuthConfig,
-    ServerConfig, ServerNoticeMessage, WireMessage, parse_server_config,
+    ServerConfig, ServerNoticeMessage, WireMessage, WsConfig, parse_server_config,
 };
 
 use crate::history::HistoryStore;
@@ -74,6 +76,7 @@ struct AppState {
     history: HistoryStore,
     registry: NodeRegistry,
     shared: SharedState,
+    ws_admission: WsAdmissionController,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +104,36 @@ enum ParsedFrame {
     Wire(Box<WireMessage>),
     Control,
     Close,
+}
+
+#[derive(Clone)]
+struct WsAdmissionController {
+    config: WsConfig,
+    state: Arc<Mutex<WsAdmissionState>>,
+}
+
+#[derive(Debug, Default)]
+struct WsAdmissionState {
+    total_active_connections: usize,
+    active_by_ip: HashMap<IpAddr, usize>,
+    auth_failures: HashMap<IpAddr, AuthFailureState>,
+}
+
+#[derive(Debug, Default)]
+struct AuthFailureState {
+    recent_failures: VecDeque<Instant>,
+    blocked_until: Option<Instant>,
+}
+
+struct WsConnectionPermit {
+    controller: WsAdmissionController,
+    client_ip: IpAddr,
+}
+
+enum WsAdmissionError {
+    TotalCapacity,
+    IpCapacity,
+    Blocked { retry_after_secs: u64 },
 }
 
 const INSTALL_AGENT_SCRIPT: &str = include_str!("../../scripts/install-agent.sh");
@@ -136,6 +169,91 @@ impl ReadonlyRouteAuth {
             .get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             == Some(expected_authorization)
+    }
+}
+
+impl WsAdmissionController {
+    fn new(config: &WsConfig) -> Self {
+        Self {
+            config: config.clone(),
+            state: Arc::new(Mutex::new(WsAdmissionState::default())),
+        }
+    }
+
+    fn try_acquire(&self, client_ip: IpAddr) -> Result<WsConnectionPermit, WsAdmissionError> {
+        let now = Instant::now();
+        let mut state = self.lock_state();
+        let failure_window = Duration::from_secs(self.config.auth_fail_window_secs);
+        let failure_state = state.auth_failures.entry(client_ip).or_default();
+        prune_auth_failure_state(failure_state, now, failure_window);
+        if let Some(blocked_until) = failure_state.blocked_until
+            && blocked_until > now
+        {
+            return Err(WsAdmissionError::Blocked {
+                retry_after_secs: blocked_until.duration_since(now).as_secs().max(1),
+            });
+        }
+        if failure_state.recent_failures.is_empty() && failure_state.blocked_until.is_none() {
+            state.auth_failures.remove(&client_ip);
+        }
+
+        if state.total_active_connections >= self.config.max_total_connections {
+            return Err(WsAdmissionError::TotalCapacity);
+        }
+        let active_for_ip = state.active_by_ip.get(&client_ip).copied().unwrap_or(0);
+        if active_for_ip >= self.config.max_connections_per_ip {
+            return Err(WsAdmissionError::IpCapacity);
+        }
+
+        state.total_active_connections = state.total_active_connections.saturating_add(1);
+        state.active_by_ip.insert(client_ip, active_for_ip + 1);
+
+        Ok(WsConnectionPermit {
+            controller: self.clone(),
+            client_ip,
+        })
+    }
+
+    fn record_auth_failure(&self, client_ip: IpAddr) {
+        let now = Instant::now();
+        let failure_window = Duration::from_secs(self.config.auth_fail_window_secs);
+        let mut state = self.lock_state();
+        let failure_state = state.auth_failures.entry(client_ip).or_default();
+        prune_auth_failure_state(failure_state, now, failure_window);
+        failure_state.recent_failures.push_back(now);
+        if failure_state.recent_failures.len() >= self.config.auth_fail_max_attempts {
+            failure_state.blocked_until =
+                Some(now + Duration::from_secs(self.config.auth_block_secs));
+            failure_state.recent_failures.clear();
+        }
+    }
+
+    fn clear_auth_failures(&self, client_ip: IpAddr) {
+        let mut state = self.lock_state();
+        state.auth_failures.remove(&client_ip);
+    }
+
+    fn release_connection(&self, client_ip: IpAddr) {
+        let mut state = self.lock_state();
+        state.total_active_connections = state.total_active_connections.saturating_sub(1);
+        if let Some(active_for_ip) = state.active_by_ip.get_mut(&client_ip) {
+            *active_for_ip = active_for_ip.saturating_sub(1);
+            if *active_for_ip == 0 {
+                state.active_by_ip.remove(&client_ip);
+            }
+        }
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, WsAdmissionState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl Drop for WsConnectionPermit {
+    fn drop(&mut self) {
+        self.controller.release_connection(self.client_ip);
     }
 }
 
@@ -185,6 +303,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
         history,
         registry,
         shared,
+        ws_admission: WsAdmissionController::new(&config.ws),
     };
     let protected_routes = Router::new()
         .route("/", get(index))
@@ -218,9 +337,12 @@ async fn run_server(config_path: &Path) -> Result<()> {
         "ximonitor server listening",
     );
 
-    axum::serve(listener, app)
-        .await
-        .context("server exited unexpectedly")
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .context("server exited unexpectedly")
 }
 
 async fn issue_node_command(config_path: &Path, args: IssueNodeArgs) -> Result<()> {
@@ -446,12 +568,22 @@ async fn node_history(
     }
 }
 
-async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> impl IntoResponse {
+async fn ws_handler(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
     let max_message_bytes = state.shared.config().max_message_bytes;
+    let client_ip = resolve_client_ip(state.shared.config().listen, peer_addr, &headers);
+    let connection_permit = match state.ws_admission.try_acquire(client_ip) {
+        Ok(permit) => permit,
+        Err(error) => return ws_admission_error_response(error),
+    };
     ws.max_frame_size(max_message_bytes)
         .max_message_size(max_message_bytes)
         .on_upgrade(move |socket| async move {
-            if let Err(error) = handle_socket(state, socket).await {
+            if let Err(error) = handle_socket(state, client_ip, connection_permit, socket).await {
                 match error {
                     ProtocolError::Client(message) => {
                         warn!(reason = %message, "websocket client disconnected");
@@ -464,20 +596,44 @@ async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> impl
         })
 }
 
-async fn handle_socket(state: AppState, mut socket: WebSocket) -> Result<(), ProtocolError> {
+async fn handle_socket(
+    state: AppState,
+    client_ip: IpAddr,
+    _connection_permit: WsConnectionPermit,
+    mut socket: WebSocket,
+) -> Result<(), ProtocolError> {
     let shared = state.shared.clone();
-    let hello = tokio::time::timeout(
+    let hello = match tokio::time::timeout(
         Duration::from_secs(HELLO_TIMEOUT_SECS),
         recv_hello(&mut socket),
     )
     .await
-    .map_err(|_| ProtocolError::Client("timed out waiting for hello message".to_string()))??;
+    {
+        Ok(Ok(hello)) => hello,
+        Ok(Err(error)) => {
+            state.ws_admission.record_auth_failure(client_ip);
+            return Err(error);
+        }
+        Err(_) => {
+            state.ws_admission.record_auth_failure(client_ip);
+            return Err(ProtocolError::Client(
+                "timed out waiting for hello message".to_string(),
+            ));
+        }
+    };
     let session_token = hello.token.clone();
-    let identity = state
+    let identity = match state
         .registry
         .authorize(&hello.identity, &session_token)
         .await
-        .map_err(|error| ProtocolError::Client(error.to_string()))?;
+    {
+        Ok(identity) => identity,
+        Err(error) => {
+            state.ws_admission.record_auth_failure(client_ip);
+            return Err(ProtocolError::Client(error.to_string()));
+        }
+    };
+    state.ws_admission.clear_auth_failures(client_ip);
 
     let node_id = identity.node_id.clone();
     let node_label = identity.node_label.clone();
@@ -689,6 +845,74 @@ fn bearer_token_from_request(request: &Request) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
+fn resolve_client_ip(listen: SocketAddr, peer_addr: SocketAddr, headers: &HeaderMap) -> IpAddr {
+    if !listen.ip().is_loopback() {
+        return peer_addr.ip();
+    }
+
+    forwarded_ip_from_headers(headers).unwrap_or_else(|| peer_addr.ip())
+}
+
+fn forwarded_ip_from_headers(headers: &HeaderMap) -> Option<IpAddr> {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(parse_ip_addr)
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .and_then(parse_ip_addr)
+        })
+}
+
+fn parse_ip_addr(value: &str) -> Option<IpAddr> {
+    value.parse::<IpAddr>().ok()
+}
+
+fn prune_auth_failure_state(state: &mut AuthFailureState, now: Instant, failure_window: Duration) {
+    while state
+        .recent_failures
+        .front()
+        .is_some_and(|timestamp| now.duration_since(*timestamp) > failure_window)
+    {
+        state.recent_failures.pop_front();
+    }
+
+    if state
+        .blocked_until
+        .is_some_and(|blocked_until| blocked_until <= now)
+    {
+        state.blocked_until = None;
+    }
+}
+
+fn ws_admission_error_response(error: WsAdmissionError) -> Response {
+    match error {
+        WsAdmissionError::TotalCapacity => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "websocket capacity exhausted; retry later",
+        )
+            .into_response(),
+        WsAdmissionError::IpCapacity => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many concurrent websocket sessions for this client",
+        )
+            .into_response(),
+        WsAdmissionError::Blocked { retry_after_secs } => (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, retry_after_secs.to_string())],
+            "too many recent websocket authentication failures",
+        )
+            .into_response(),
+    }
+}
+
 fn spawn_insecure_transport_warning(public_base_url: String, listen: std::net::SocketAddr) {
     if !uses_insecure_remote_public_base_url(&public_base_url, listen) {
         return;
@@ -793,26 +1017,26 @@ fn init_tracing() {
 mod tests {
     use std::sync::Arc;
 
-    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use axum::Router;
     use axum::body::Body;
-    use axum::http::{Request, header};
+    use axum::http::{HeaderMap, Request, header};
     use tokio::runtime::Runtime;
 
     use super::{
-        AppState, ReadonlyRouteAuth, bootstrap, healthz, index, install_agent_script,
-        install_bootstrap, node_detail, node_history, node_status, nodes, overview,
-        uses_insecure_remote_public_base_url, ws_handler,
+        AppState, ReadonlyRouteAuth, WsAdmissionController, WsAdmissionError, bootstrap, healthz,
+        index, install_agent_script, install_bootstrap, node_detail, node_history, node_status,
+        nodes, overview, resolve_client_ip, uses_insecure_remote_public_base_url, ws_handler,
     };
     use crate::history::HistoryStore;
     use crate::registry::NodeRegistry;
     use crate::state::SharedState;
     use axum::routing::get;
     use tower_http::trace::TraceLayer;
-    use ximonitor_proto::ServerConfig;
+    use ximonitor_proto::{ServerConfig, WsConfig};
 
     #[test]
     fn router_builds_with_v08_path_syntax() {
@@ -826,6 +1050,13 @@ mod tests {
             listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             readonly_auth: None,
+            ws: WsConfig {
+                max_total_connections: 32,
+                max_connections_per_ip: 8,
+                auth_fail_window_secs: 300,
+                auth_fail_max_attempts: 6,
+                auth_block_secs: 600,
+            },
             node_registry_path: registry_path,
             history_db_path: PathBuf::from("./data/history.sqlite3"),
             snapshot_path: PathBuf::from("./data/snapshot.json"),
@@ -845,6 +1076,13 @@ mod tests {
                 .block_on(NodeRegistry::load(config.node_registry_path.as_path()))
                 .expect("registry should load"),
             shared: SharedState::new(config),
+            ws_admission: WsAdmissionController::new(&WsConfig {
+                max_total_connections: 32,
+                max_connections_per_ip: 8,
+                auth_fail_window_secs: 300,
+                auth_fail_max_attempts: 6,
+                auth_block_secs: 600,
+            }),
         };
 
         let _app: Router = Router::new()
@@ -904,5 +1142,44 @@ mod tests {
             "http://localhost:8080",
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
         ));
+    }
+
+    #[test]
+    fn loopback_listener_uses_forwarded_ip_for_ws_limits() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "198.51.100.24".parse().expect("header value"),
+        );
+
+        let client_ip = resolve_client_ip(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 51234)),
+            &headers,
+        );
+
+        assert_eq!(client_ip, IpAddr::V4("198.51.100.24".parse().expect("ip")));
+    }
+
+    #[test]
+    fn repeated_auth_failures_trigger_ws_block() {
+        let controller = WsAdmissionController::new(&WsConfig {
+            max_total_connections: 16,
+            max_connections_per_ip: 4,
+            auth_fail_window_secs: 60,
+            auth_fail_max_attempts: 2,
+            auth_block_secs: 300,
+        });
+        let client_ip = IpAddr::V4("198.51.100.24".parse().expect("ip"));
+
+        controller.record_auth_failure(client_ip);
+        controller.record_auth_failure(client_ip);
+
+        match controller.try_acquire(client_ip) {
+            Err(WsAdmissionError::Blocked { retry_after_secs }) => {
+                assert!(retry_after_secs > 0);
+            }
+            _ => panic!("client should be temporarily blocked"),
+        }
     }
 }

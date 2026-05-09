@@ -11,6 +11,11 @@ pub const DEFAULT_REFRESH_INTERVAL_SECS: u64 = 5;
 pub const DEFAULT_REPORT_INTERVAL_SECS: u64 = 5;
 pub const DEFAULT_HISTORY_RETENTION_HOURS: u64 = 72;
 pub const DEFAULT_HISTORY_WRITE_INTERVAL_SECS: u64 = 30;
+pub const DEFAULT_WS_MAX_TOTAL_CONNECTIONS: usize = 1024;
+pub const DEFAULT_WS_MAX_CONNECTIONS_PER_IP: usize = 32;
+pub const DEFAULT_WS_AUTH_FAIL_WINDOW_SECS: u64 = 300;
+pub const DEFAULT_WS_AUTH_FAIL_MAX_ATTEMPTS: usize = 12;
+pub const DEFAULT_WS_AUTH_BLOCK_SECS: u64 = 900;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
@@ -38,6 +43,7 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     pub public_base_url: String,
     pub readonly_auth: Option<ReadonlyAuthConfig>,
+    pub ws: WsConfig,
     pub node_registry_path: PathBuf,
     pub history_db_path: PathBuf,
     pub snapshot_path: PathBuf,
@@ -55,6 +61,15 @@ pub struct ServerConfig {
 pub struct ReadonlyAuthConfig {
     pub username: String,
     pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WsConfig {
+    pub max_total_connections: usize,
+    pub max_connections_per_ip: usize,
+    pub auth_fail_window_secs: u64,
+    pub auth_fail_max_attempts: usize,
+    pub auth_block_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,6 +101,8 @@ struct RawServerConfigFile {
     server: RawServerSection,
     #[serde(default)]
     auth: RawAuthSection,
+    #[serde(default)]
+    ws: RawWsSection,
     #[serde(default)]
     ui: RawUiSection,
     #[serde(default)]
@@ -120,6 +137,21 @@ struct RawUiSection {
     refresh_interval_secs: u64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawWsSection {
+    #[serde(default = "default_ws_max_total_connections")]
+    max_total_connections: usize,
+    #[serde(default = "default_ws_max_connections_per_ip")]
+    max_connections_per_ip: usize,
+    #[serde(default = "default_ws_auth_fail_window_secs")]
+    auth_fail_window_secs: u64,
+    #[serde(default = "default_ws_auth_fail_max_attempts")]
+    auth_fail_max_attempts: usize,
+    #[serde(default = "default_ws_auth_block_secs")]
+    auth_block_secs: u64,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct RawAuthSection {
@@ -131,6 +163,18 @@ impl Default for RawUiSection {
     fn default() -> Self {
         Self {
             refresh_interval_secs: default_refresh_interval_secs(),
+        }
+    }
+}
+
+impl Default for RawWsSection {
+    fn default() -> Self {
+        Self {
+            max_total_connections: default_ws_max_total_connections(),
+            max_connections_per_ip: default_ws_max_connections_per_ip(),
+            auth_fail_window_secs: default_ws_auth_fail_window_secs(),
+            auth_fail_max_attempts: default_ws_auth_fail_max_attempts(),
+            auth_block_secs: default_ws_auth_block_secs(),
         }
     }
 }
@@ -255,6 +299,36 @@ impl RawServerConfigFile {
                 "server.max_message_bytes must be at least 1024 bytes",
             ));
         }
+        if self.ws.max_total_connections < 1 {
+            return Err(ConfigError::new(
+                "ws.max_total_connections must be at least 1",
+            ));
+        }
+        if self.ws.max_connections_per_ip < 1 {
+            return Err(ConfigError::new(
+                "ws.max_connections_per_ip must be at least 1",
+            ));
+        }
+        if self.ws.max_connections_per_ip > self.ws.max_total_connections {
+            return Err(ConfigError::new(
+                "ws.max_connections_per_ip must be <= ws.max_total_connections",
+            ));
+        }
+        if self.ws.auth_fail_window_secs < 1 {
+            return Err(ConfigError::new(
+                "ws.auth_fail_window_secs must be at least 1 second",
+            ));
+        }
+        if self.ws.auth_fail_max_attempts < 1 {
+            return Err(ConfigError::new(
+                "ws.auth_fail_max_attempts must be at least 1",
+            ));
+        }
+        if self.ws.auth_block_secs < 1 {
+            return Err(ConfigError::new(
+                "ws.auth_block_secs must be at least 1 second",
+            ));
+        }
         if self.ui.refresh_interval_secs < 1 {
             return Err(ConfigError::new(
                 "ui.refresh_interval_secs must be at least 1 second",
@@ -270,6 +344,13 @@ impl RawServerConfigFile {
             listen,
             public_base_url: self.server.public_base_url,
             readonly_auth,
+            ws: WsConfig {
+                max_total_connections: self.ws.max_total_connections,
+                max_connections_per_ip: self.ws.max_connections_per_ip,
+                auth_fail_window_secs: self.ws.auth_fail_window_secs,
+                auth_fail_max_attempts: self.ws.auth_fail_max_attempts,
+                auth_block_secs: self.ws.auth_block_secs,
+            },
             node_registry_path: self.server.node_registry_path,
             history_db_path: self.server.history_db_path,
             snapshot_path: self.server.snapshot_path,
@@ -403,6 +484,26 @@ fn default_refresh_interval_secs() -> u64 {
     DEFAULT_REFRESH_INTERVAL_SECS
 }
 
+fn default_ws_max_total_connections() -> usize {
+    DEFAULT_WS_MAX_TOTAL_CONNECTIONS
+}
+
+fn default_ws_max_connections_per_ip() -> usize {
+    DEFAULT_WS_MAX_CONNECTIONS_PER_IP
+}
+
+fn default_ws_auth_fail_window_secs() -> u64 {
+    DEFAULT_WS_AUTH_FAIL_WINDOW_SECS
+}
+
+fn default_ws_auth_fail_max_attempts() -> usize {
+    DEFAULT_WS_AUTH_FAIL_MAX_ATTEMPTS
+}
+
+fn default_ws_auth_block_secs() -> u64 {
+    DEFAULT_WS_AUTH_BLOCK_SECS
+}
+
 fn default_report_interval_secs() -> u64 {
     DEFAULT_REPORT_INTERVAL_SECS
 }
@@ -419,7 +520,11 @@ fn default_ignored_filesystems() -> Vec<String> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{DEFAULT_MAX_MESSAGE_BYTES, parse_agent_config, parse_server_config};
+    use super::{
+        DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_WS_AUTH_BLOCK_SECS, DEFAULT_WS_AUTH_FAIL_MAX_ATTEMPTS,
+        DEFAULT_WS_AUTH_FAIL_WINDOW_SECS, DEFAULT_WS_MAX_CONNECTIONS_PER_IP,
+        DEFAULT_WS_MAX_TOTAL_CONNECTIONS, parse_agent_config, parse_server_config,
+    };
 
     #[test]
     fn parses_server_config_with_defaults() {
@@ -435,6 +540,23 @@ mod tests {
         assert_eq!(config.listen.to_string(), "127.0.0.1:8080");
         assert_eq!(config.readonly_auth, None);
         assert_eq!(config.max_message_bytes, DEFAULT_MAX_MESSAGE_BYTES);
+        assert_eq!(
+            config.ws.max_total_connections,
+            DEFAULT_WS_MAX_TOTAL_CONNECTIONS
+        );
+        assert_eq!(
+            config.ws.max_connections_per_ip,
+            DEFAULT_WS_MAX_CONNECTIONS_PER_IP
+        );
+        assert_eq!(
+            config.ws.auth_fail_window_secs,
+            DEFAULT_WS_AUTH_FAIL_WINDOW_SECS
+        );
+        assert_eq!(
+            config.ws.auth_fail_max_attempts,
+            DEFAULT_WS_AUTH_FAIL_MAX_ATTEMPTS
+        );
+        assert_eq!(config.ws.auth_block_secs, DEFAULT_WS_AUTH_BLOCK_SECS);
         assert_eq!(
             config.node_registry_path,
             PathBuf::from("./config/server.json")
@@ -571,5 +693,23 @@ mod tests {
         .expect_err("release base without checksums should fail");
 
         assert!(error.to_string().contains("agent_release_sha256_x86_64"));
+    }
+
+    #[test]
+    fn rejects_invalid_ws_limits() {
+        let error = parse_server_config(
+            r#"
+            [server]
+            listen = "127.0.0.1:8080"
+            public_base_url = "http://127.0.0.1:8080"
+
+            [ws]
+            max_total_connections = 4
+            max_connections_per_ip = 8
+            "#,
+        )
+        .expect_err("invalid ws limits should fail");
+
+        assert!(error.to_string().contains("ws.max_connections_per_ip"));
     }
 }
