@@ -177,7 +177,14 @@ resolve_release_base_url() {
   case "$BASE_URL" in
     https://github.com/*/releases/latest/download)
       releases_root="${BASE_URL%/latest/download}"
-      redirect_location="$(curl -fsSI -o /dev/null -w '%header{location}' "$releases_root/latest")" \
+      redirect_location="$(curl -fsSI "$releases_root/latest" | awk '
+        tolower($1) == "location:" {
+          value = $2
+          sub(/\r$/, "", value)
+          print value
+          exit
+        }
+      ')" \
         || fail "failed to resolve latest GitHub release"
       [ -n "$redirect_location" ] || fail "GitHub latest release redirect did not include a location"
       resolved_tag="${redirect_location##*/}"
