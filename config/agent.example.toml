@@ -1,9 +1,8 @@
 [agent]
 node_id = "hk-01"
 node_label = "Hong Kong 01"
-server = "ws://127.0.0.1:8080/ws"
-token = "change-me"
+server = "wss://monitor.example.com/ws"
+token = "issued-by-ximonitor-server"
 report_interval_secs = 5
 hostname_override = "hk-01.internal"
 tags = ["apac", "edge"]
-

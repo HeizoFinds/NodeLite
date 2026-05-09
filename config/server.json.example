@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    {
+      "node_id": "hk-01",
+      "node_label": "Hong Kong 01",
+      "token": "replace-with-issued-token",
+      "tags": [
+        "apac",
+        "edge"
+      ],
+      "created_at": "2026-05-09T00:00:00Z"
+    }
+  ]
+}

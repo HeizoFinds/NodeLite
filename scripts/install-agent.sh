@@ -69,7 +69,7 @@ while [ "$#" -gt 0 ]; do
       cat <<'EOF'
 Usage:
   sh install-agent.sh \
-    --server ws://monitor.example.com:8080/ws \
+    --server wss://monitor.example.com/ws \
     --node-id hk-01 \
     --token YOUR_TOKEN
 
@@ -143,6 +143,7 @@ server = "$(toml_escape "$SERVER")"
 token = "$(toml_escape "$TOKEN")"
 report_interval_secs = 5
 EOF
+chmod 0600 "$CONFIG_PATH"
 
 cat >"$UNIT_PATH" <<EOF
 [Unit]
@@ -168,4 +169,3 @@ systemctl restart ximonitor-agent.service
 printf '%s\n' "XiMonitor agent installed and started."
 printf '%s\n' "Config: $CONFIG_PATH"
 printf '%s\n' "Service: ximonitor-agent.service"
-
