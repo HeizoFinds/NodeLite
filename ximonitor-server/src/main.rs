@@ -43,7 +43,7 @@ use crate::registry::{
 };
 use crate::snapshot::{load_snapshot, spawn_snapshot_persistor};
 use crate::state::SharedState;
-use crate::ui::{index_html, node_html};
+use crate::ui::{UI_I18N_JSON, index_html, node_html};
 
 #[derive(Debug, Parser)]
 #[command(name = "ximonitor-server")]
@@ -331,6 +331,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
     let protected_routes = Router::new()
         .route("/", get(index))
         .route("/nodes/{node_id}", get(node_detail))
+        .route("/assets/ui-i18n.json", get(ui_i18n_asset))
         .route("/api/bootstrap", get(bootstrap))
         .route("/api/overview", get(overview))
         .route("/api/nodes", get(nodes))
@@ -488,6 +489,14 @@ async fn node_detail(
         &node_id,
         state.shared.config().refresh_interval_secs,
     ))
+}
+
+async fn ui_i18n_asset() -> Response {
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        UI_I18N_JSON,
+    )
+        .into_response()
 }
 
 async fn healthz() -> StatusCode {
@@ -1085,7 +1094,8 @@ mod tests {
     use super::{
         AppState, ReadonlyRouteAuth, WsAdmissionController, WsAdmissionError, bootstrap, healthz,
         index, install_agent_script, install_bootstrap, node_detail, node_history, node_status,
-        nodes, overview, resolve_client_ip, uses_insecure_remote_public_base_url, ws_handler,
+        nodes, overview, resolve_client_ip, ui_i18n_asset, uses_insecure_remote_public_base_url,
+        ws_handler,
     };
     use crate::history::HistoryStore;
     use crate::registry::NodeRegistry;
@@ -1144,6 +1154,7 @@ mod tests {
         let _app: Router = Router::new()
             .route("/", get(index))
             .route("/nodes/{node_id}", get(node_detail))
+            .route("/assets/ui-i18n.json", get(ui_i18n_asset))
             .route("/healthz", get(healthz))
             .route("/install/install-agent.sh", get(install_agent_script))
             .route("/install/bootstrap", get(install_bootstrap))

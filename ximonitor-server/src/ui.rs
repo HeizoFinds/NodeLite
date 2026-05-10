@@ -1,8 +1,13 @@
+pub const UI_I18N_JSON: &str = include_str!("../assets/ui-i18n.json");
+pub const UI_I18N_ASSET_PATH: &str = "/assets/ui-i18n.json";
+
 pub fn index_html(refresh_interval_secs: u64) -> String {
-    INDEX_TEMPLATE.replace(
-        "__REFRESH_MS__",
-        &(refresh_interval_secs * 1000).to_string(),
-    )
+    INDEX_TEMPLATE
+        .replace(
+            "__REFRESH_MS__",
+            &(refresh_interval_secs * 1000).to_string(),
+        )
+        .replace("__I18N_ASSET_PATH__", UI_I18N_ASSET_PATH)
 }
 
 pub fn node_html(node_id: &str, refresh_interval_secs: u64) -> String {
@@ -11,6 +16,7 @@ pub fn node_html(node_id: &str, refresh_interval_secs: u64) -> String {
             "__REFRESH_MS__",
             &(refresh_interval_secs * 1000).to_string(),
         )
+        .replace("__I18N_ASSET_PATH__", UI_I18N_ASSET_PATH)
         .replace(
             "__NODE_ID_JSON__",
             &serde_json::to_string(node_id).unwrap_or_else(|_| "\"\"".to_string()),
@@ -70,6 +76,27 @@ const INDEX_TEMPLATE: &str = r#"<!doctype html>
         color: var(--muted);
         font-size: 1.03rem;
         line-height: 1.7;
+      }
+      .hero-side {
+        display: flex;
+        flex-direction: column;
+        align-items: end;
+        gap: 12px;
+      }
+      .lang-picker {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+      .lang-select {
+        border: 1px solid rgba(24, 33, 44, 0.12);
+        border-radius: 999px;
+        padding: 10px 14px;
+        background: rgba(255, 255, 255, 0.82);
+        color: var(--ink);
+        font: inherit;
       }
       .stamp {
         text-align: right;
@@ -173,7 +200,11 @@ const INDEX_TEMPLATE: &str = r#"<!doctype html>
       @media (max-width: 720px) {
         .shell { width: calc(100vw - 20px); }
         .hero { display: block; }
-        .stamp { text-align: left; margin-top: 12px; }
+        .hero-side {
+          align-items: start;
+          margin-top: 16px;
+        }
+        .stamp { text-align: left; }
         .cards { grid-template-columns: 1fr; }
       }
     </style>
@@ -182,12 +213,18 @@ const INDEX_TEMPLATE: &str = r#"<!doctype html>
     <div class="shell">
       <section class="hero">
         <div>
-          <h1>XiMonitor</h1>
-          <p>Read-only node telemetry for CPU, load, memory, disks, throughput, and WebSocket RTT. Configuration stays on disk; the web view stays observational.</p>
+          <h1 data-i18n="index.heading">XiMonitor</h1>
+          <p data-i18n="index.tagline">Read-only node telemetry for CPU, load, memory, disks, throughput, and WebSocket RTT. Configuration stays on disk; the web view stays observational.</p>
         </div>
-        <div class="stamp">
-          <div>Refreshes every <strong id="refresh-secs"></strong></div>
-          <div id="updated-at">Waiting for data…</div>
+        <div class="hero-side">
+          <label class="lang-picker">
+            <span data-i18n="common.language">Language</span>
+            <select id="language-select" class="lang-select" aria-label="Language"></select>
+          </label>
+          <div class="stamp">
+            <div id="refresh-note">Refreshes every 5s</div>
+            <div id="updated-at">Waiting for data…</div>
+          </div>
         </div>
       </section>
 
@@ -197,7 +234,12 @@ const INDEX_TEMPLATE: &str = r#"<!doctype html>
 
     <script>
       const REFRESH_MS = __REFRESH_MS__;
-      document.getElementById("refresh-secs").textContent = `${Math.round(REFRESH_MS / 1000)}s`;
+      const I18N_ASSET_PATH = "__I18N_ASSET_PATH__";
+      const LANGUAGE_STORAGE_KEY = "ximonitor.ui.language";
+      let I18N = { en: { "__label": "English" } };
+      let currentLanguage = "en";
+      let latestOverview = null;
+      let latestNodes = [];
 
       function escapeHtml(value) {
         return String(value)
@@ -208,8 +250,86 @@ const INDEX_TEMPLATE: &str = r#"<!doctype html>
           .replaceAll("'", "&#39;");
       }
 
+      function templateText(value, vars = {}) {
+        return String(value).replace(/\{(\w+)\}/g, (_, key) => String(vars[key] ?? ""));
+      }
+
+      function supportedLanguages() {
+        return Object.keys(I18N).filter((key) => key && typeof I18N[key] === "object");
+      }
+
+      function resolveLanguage(candidate) {
+        const languages = supportedLanguages();
+        if (candidate && languages.includes(candidate)) {
+          return candidate;
+        }
+        const base = String(candidate || "").split("-")[0].toLowerCase();
+        const matched = languages.find((language) => language.toLowerCase().startsWith(base));
+        return matched || (languages.includes("en") ? "en" : languages[0] || "en");
+      }
+
+      function t(key, vars = {}) {
+        const primary = I18N[currentLanguage] || {};
+        const fallback = I18N.en || {};
+        return templateText(primary[key] ?? fallback[key] ?? key, vars);
+      }
+
+      function languageLabel(language) {
+        return (I18N[language] && I18N[language].__label) || language;
+      }
+
+      function storeLanguage(language) {
+        try {
+          window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+        } catch (_error) {
+          // Ignore storage failures in private or restricted browsers.
+        }
+      }
+
+      function loadStoredLanguage() {
+        try {
+          return window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+        } catch (_error) {
+          return null;
+        }
+      }
+
+      async function loadI18n() {
+        try {
+          const response = await fetch(I18N_ASSET_PATH, {
+            headers: { "accept": "application/json" },
+          });
+          if (!response.ok) {
+            throw new Error(`${I18N_ASSET_PATH} -> ${response.status}`);
+          }
+          I18N = await response.json();
+        } catch (error) {
+          console.warn("failed to load ui translations", error);
+        }
+        currentLanguage = resolveLanguage(loadStoredLanguage() || navigator.language);
+        storeLanguage(currentLanguage);
+      }
+
+      function bindLanguageSelector(onChange) {
+        const select = document.getElementById("language-select");
+        const renderOptions = () => {
+          select.innerHTML = supportedLanguages().map((language) => `
+            <option value="${escapeHtml(language)}">${escapeHtml(languageLabel(language))}</option>
+          `).join("");
+          select.value = currentLanguage;
+        };
+
+        renderOptions();
+        select.addEventListener("change", (event) => {
+          currentLanguage = resolveLanguage(event.target.value);
+          storeLanguage(currentLanguage);
+          renderOptions();
+          onChange();
+        });
+      }
+
       function fmtBytes(bytes) {
-        if (bytes == null) return "n/a";
+        if (bytes == null) return t("common.not_available");
         const units = ["B", "KB", "MB", "GB", "TB", "PB"];
         let value = Number(bytes);
         let index = 0;
@@ -221,35 +341,51 @@ const INDEX_TEMPLATE: &str = r#"<!doctype html>
       }
 
       function fmtRate(bytes) {
-        if (bytes == null) return "n/a";
+        if (bytes == null) return t("common.not_available");
         return `${fmtBytes(bytes)}/s`;
       }
 
       function fmtPercent(value) {
-        if (value == null || Number.isNaN(Number(value))) return "n/a";
+        if (value == null || Number.isNaN(Number(value))) return t("common.not_available");
         return `${Number(value).toFixed(1)}%`;
       }
 
       function fmtLatency(value) {
-        if (value == null) return "n/a";
+        if (value == null) return t("common.not_available");
         return `${Math.round(value)} ms`;
       }
 
       function diskSummary(disks) {
-        if (!Array.isArray(disks) || disks.length === 0) return "n/a";
+        if (!Array.isArray(disks) || disks.length === 0) return t("common.not_available");
         const total = disks.reduce((sum, disk) => sum + (disk.total_bytes || 0), 0);
         const used = disks.reduce((sum, disk) => sum + (disk.used_bytes || 0), 0);
-        if (!total) return "n/a";
+        if (!total) return t("common.not_available");
         return fmtPercent((used / total) * 100);
       }
 
+      function applyChrome() {
+        document.documentElement.lang = currentLanguage;
+        document.title = t("index.page_title");
+        document.querySelectorAll("[data-i18n]").forEach((node) => {
+          node.textContent = t(node.dataset.i18n);
+        });
+        document.getElementById("refresh-note").textContent = t("index.refreshes_every", {
+          seconds: `${Math.round(REFRESH_MS / 1000)}s`,
+        });
+        document.getElementById("updated-at").textContent = latestOverview
+          ? t("common.updated_at", { time: new Date(latestOverview.generated_at).toLocaleString() })
+          : t("common.waiting_for_data");
+      }
+
       function setOverview(data) {
+        latestOverview = data;
         const cards = [
-          ["Nodes", `${data.online_nodes}/${data.total_nodes}`, "online / total"],
-          ["Latency", fmtLatency(data.average_latency_ms), "mean WebSocket RTT"],
-          ["Traffic", `${fmtBytes(data.total_rx_bytes)} in`, `${fmtBytes(data.total_tx_bytes)} out`],
-          ["Realtime", `${fmtRate(data.current_rx_bytes_per_sec)} down`, `${fmtRate(data.current_tx_bytes_per_sec)} up`],
+          [t("index.nodes"), `${data.online_nodes}/${data.total_nodes}`, t("index.online_total")],
+          [t("index.latency"), fmtLatency(data.average_latency_ms), t("index.mean_rtt")],
+          [t("index.traffic"), t("index.traffic_in", { value: fmtBytes(data.total_rx_bytes) }), t("index.traffic_out", { value: fmtBytes(data.total_tx_bytes) })],
+          [t("index.realtime"), t("index.realtime_down", { value: fmtRate(data.current_rx_bytes_per_sec) }), t("index.realtime_up", { value: fmtRate(data.current_tx_bytes_per_sec) })],
         ];
+
         document.getElementById("overview").innerHTML = cards.map(([label, value, sub]) => `
           <article class="card">
             <div class="label">${escapeHtml(label)}</div>
@@ -257,17 +393,19 @@ const INDEX_TEMPLATE: &str = r#"<!doctype html>
             <div class="label" style="margin-top:8px;">${escapeHtml(sub)}</div>
           </article>
         `).join("");
-        document.getElementById("updated-at").textContent = `Updated ${new Date(data.generated_at).toLocaleString()}`;
+
+        applyChrome();
       }
 
       function setNodes(nodes) {
+        latestNodes = Array.isArray(nodes) ? nodes : [];
         const root = document.getElementById("nodes");
-        if (!Array.isArray(nodes) || nodes.length === 0) {
-          root.innerHTML = `<div class="empty">No agents connected yet. Once an agent sends <code>hello</code> and <code>metrics</code>, it will appear here.</div>`;
+        if (latestNodes.length === 0) {
+          root.innerHTML = `<div class="empty">${escapeHtml(t("index.no_agents"))}</div>`;
           return;
         }
 
-        root.innerHTML = `<div class="node-grid">${nodes.map((node) => {
+        root.innerHTML = `<div class="node-grid">${latestNodes.map((node) => {
           const snapshot = node.snapshot || {};
           const memory = snapshot.memory || {};
           return `
@@ -275,17 +413,17 @@ const INDEX_TEMPLATE: &str = r#"<!doctype html>
               <div class="node-head">
                 <div>
                   <h2 class="node-title">${escapeHtml(node.identity.node_label)}</h2>
-                  <div class="node-id">${escapeHtml(node.identity.node_id)} · ${escapeHtml(node.identity.hostname || "unknown host")}</div>
+                  <div class="node-id">${escapeHtml(node.identity.node_id)} · ${escapeHtml(node.identity.hostname || t("common.unknown_host"))}</div>
                 </div>
-                <span class="badge ${node.online ? "online" : "offline"}">${node.online ? "online" : "offline"}</span>
+                <span class="badge ${node.online ? "online" : "offline"}">${escapeHtml(node.online ? t("common.online") : t("common.offline"))}</span>
               </div>
               <div class="kv">
-                <div><strong>${fmtPercent(snapshot.cpu_usage_percent)}</strong><span>CPU</span></div>
-                <div><strong>${fmtPercent(memory.total_bytes ? (memory.used_bytes / memory.total_bytes) * 100 : null)}</strong><span>Memory</span></div>
-                <div><strong>${fmtRate(snapshot.network?.rx_bytes_per_sec)}</strong><span>Download</span></div>
-                <div><strong>${fmtRate(snapshot.network?.tx_bytes_per_sec)}</strong><span>Upload</span></div>
-                <div><strong>${fmtLatency(node.latency_ms)}</strong><span>RTT</span></div>
-                <div><strong>${diskSummary(snapshot.disks)}</strong><span>Disks</span></div>
+                <div><strong>${fmtPercent(snapshot.cpu_usage_percent)}</strong><span>${escapeHtml(t("index.node.cpu"))}</span></div>
+                <div><strong>${fmtPercent(memory.total_bytes ? (memory.used_bytes / memory.total_bytes) * 100 : null)}</strong><span>${escapeHtml(t("index.node.memory"))}</span></div>
+                <div><strong>${fmtRate(snapshot.network?.rx_bytes_per_sec)}</strong><span>${escapeHtml(t("index.node.download"))}</span></div>
+                <div><strong>${fmtRate(snapshot.network?.tx_bytes_per_sec)}</strong><span>${escapeHtml(t("index.node.upload"))}</span></div>
+                <div><strong>${fmtLatency(node.latency_ms)}</strong><span>${escapeHtml(t("index.node.rtt"))}</span></div>
+                <div><strong>${diskSummary(snapshot.disks)}</strong><span>${escapeHtml(t("index.node.disks"))}</span></div>
               </div>
             </a>
           `;
@@ -307,13 +445,26 @@ const INDEX_TEMPLATE: &str = r#"<!doctype html>
           setOverview(overview);
           setNodes(nodes);
         } catch (error) {
-          document.getElementById("nodes").innerHTML = `<div class="empty">Failed to load dashboard data: ${escapeHtml(error.message)}</div>`;
+          document.getElementById("nodes").innerHTML = `<div class="empty">${escapeHtml(t("index.dashboard_load_failed", { error: error.message }))}</div>`;
         } finally {
           window.setTimeout(refresh, REFRESH_MS);
         }
       }
 
-      refresh();
+      async function init() {
+        await loadI18n();
+        bindLanguageSelector(() => {
+          applyChrome();
+          if (latestOverview) {
+            setOverview(latestOverview);
+          }
+          setNodes(latestNodes);
+        });
+        applyChrome();
+        refresh();
+      }
+
+      init();
     </script>
   </body>
 </html>
@@ -363,15 +514,30 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         gap: 18px;
         margin-bottom: 18px;
       }
+      .topline .back {
+        text-decoration: none;
+        color: var(--muted);
+        font-weight: 600;
+      }
       .topline-actions {
         display: flex;
         align-items: center;
         gap: 14px;
       }
-      .topline .back {
-        text-decoration: none;
+      .lang-picker {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
         color: var(--muted);
-        font-weight: 600;
+        font-size: 0.92rem;
+      }
+      .lang-select {
+        border: 1px solid rgba(26, 32, 43, 0.12);
+        border-radius: 999px;
+        padding: 10px 14px;
+        background: rgba(255, 255, 255, 0.82);
+        color: var(--ink);
+        font: inherit;
       }
       .hero, .panel {
         background: var(--panel);
@@ -415,10 +581,6 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         margin-top: 8px;
         font-size: clamp(1.5rem, 2.7vw, 2.2rem);
         font-weight: 700;
-      }
-      .charts {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        margin-bottom: 18px;
       }
       .controls-panel {
         margin-bottom: 18px;
@@ -474,6 +636,10 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         color: var(--accent);
         background: rgba(15, 118, 110, 0.12);
       }
+      .charts {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin-bottom: 18px;
+      }
       .chart-box {
         height: 210px;
         margin-top: 14px;
@@ -522,12 +688,18 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
   <body>
     <div class="shell">
       <div class="topline">
-        <a class="back" href="/">← Back to dashboard</a>
-        <div id="updated" class="label">Waiting for node data…</div>
+        <a class="back" href="/">← <span data-i18n="node.back">Back to dashboard</span></a>
+        <div class="topline-actions">
+          <label class="lang-picker">
+            <span data-i18n="common.language">Language</span>
+            <select id="language-select" class="lang-select" aria-label="Language"></select>
+          </label>
+          <div id="updated" class="label">Waiting for node data…</div>
+        </div>
       </div>
 
       <section class="hero">
-        <h1 id="title">Loading node…</h1>
+        <h1 id="title" data-i18n="node.loading">Loading node…</h1>
         <div class="meta" id="meta"></div>
       </section>
 
@@ -536,7 +708,7 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
       <section class="panel controls-panel">
         <div class="controls-head">
           <div>
-            <div class="label">History Window</div>
+            <div class="label" data-i18n="node.history_window">History Window</div>
             <div class="control-value" id="history-window-value">Last 24 hours</div>
           </div>
           <button type="button" class="toggle-button" id="peak-clip-toggle">Clip Spikes: Off</button>
@@ -547,25 +719,25 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
 
       <section class="charts">
         <article class="panel">
-          <div class="label">CPU Usage</div>
+          <div class="label" data-i18n="node.cpu_usage">CPU Usage</div>
           <div class="chart-box" id="chart-cpu"></div>
         </article>
         <article class="panel">
-          <div class="label">Memory Usage</div>
+          <div class="label" data-i18n="node.memory_usage">Memory Usage</div>
           <div class="chart-box" id="chart-memory"></div>
         </article>
         <article class="panel">
-          <div class="label">Download / Upload</div>
+          <div class="label" data-i18n="node.download_upload">Download / Upload</div>
           <div class="chart-box" id="chart-network"></div>
         </article>
         <article class="panel">
-          <div class="label">WebSocket RTT</div>
+          <div class="label" data-i18n="node.websocket_rtt">WebSocket RTT</div>
           <div class="chart-box" id="chart-latency"></div>
         </article>
       </section>
 
       <section class="panel disks">
-        <div class="label">Mounted Disks</div>
+        <div class="label" data-i18n="node.mounted_disks">Mounted Disks</div>
         <div id="disks" style="margin-top: 14px;"></div>
       </section>
     </div>
@@ -573,21 +745,19 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
     <script>
       const NODE_ID = __NODE_ID_JSON__;
       const REFRESH_MS = __REFRESH_MS__;
+      const I18N_ASSET_PATH = "__I18N_ASSET_PATH__";
+      const LANGUAGE_STORAGE_KEY = "ximonitor.ui.language";
       const HISTORY_MAX_POINTS = 480;
-      const HISTORY_WINDOWS = [
-        { hours: 6, label: "6h" },
-        { hours: 12, label: "12h" },
-        { hours: 24, label: "24h" },
-        { hours: 72, label: "3d" },
-        { hours: 168, label: "7d" },
-        { hours: 336, label: "14d" },
-      ];
+      const HISTORY_WINDOWS = [6, 12, 24, 72, 168, 336];
+      let I18N = { en: { "__label": "English" } };
+      let currentLanguage = "en";
+      let latestNode = null;
+      let latestHistory = [];
+      let refreshTimer = null;
       const chartState = {
         windowIndex: 2,
         peakClipEnabled: false,
       };
-      let latestHistory = [];
-      let refreshTimer = null;
 
       function escapeHtml(value) {
         return String(value)
@@ -598,8 +768,86 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
           .replaceAll("'", "&#39;");
       }
 
+      function templateText(value, vars = {}) {
+        return String(value).replace(/\{(\w+)\}/g, (_, key) => String(vars[key] ?? ""));
+      }
+
+      function supportedLanguages() {
+        return Object.keys(I18N).filter((key) => key && typeof I18N[key] === "object");
+      }
+
+      function resolveLanguage(candidate) {
+        const languages = supportedLanguages();
+        if (candidate && languages.includes(candidate)) {
+          return candidate;
+        }
+        const base = String(candidate || "").split("-")[0].toLowerCase();
+        const matched = languages.find((language) => language.toLowerCase().startsWith(base));
+        return matched || (languages.includes("en") ? "en" : languages[0] || "en");
+      }
+
+      function t(key, vars = {}) {
+        const primary = I18N[currentLanguage] || {};
+        const fallback = I18N.en || {};
+        return templateText(primary[key] ?? fallback[key] ?? key, vars);
+      }
+
+      function languageLabel(language) {
+        return (I18N[language] && I18N[language].__label) || language;
+      }
+
+      function storeLanguage(language) {
+        try {
+          window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+        } catch (_error) {
+          // Ignore storage failures in private or restricted browsers.
+        }
+      }
+
+      function loadStoredLanguage() {
+        try {
+          return window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+        } catch (_error) {
+          return null;
+        }
+      }
+
+      async function loadI18n() {
+        try {
+          const response = await fetch(I18N_ASSET_PATH, {
+            headers: { "accept": "application/json" },
+          });
+          if (!response.ok) {
+            throw new Error(`${I18N_ASSET_PATH} -> ${response.status}`);
+          }
+          I18N = await response.json();
+        } catch (error) {
+          console.warn("failed to load ui translations", error);
+        }
+        currentLanguage = resolveLanguage(loadStoredLanguage() || navigator.language);
+        storeLanguage(currentLanguage);
+      }
+
+      function bindLanguageSelector(onChange) {
+        const select = document.getElementById("language-select");
+        const renderOptions = () => {
+          select.innerHTML = supportedLanguages().map((language) => `
+            <option value="${escapeHtml(language)}">${escapeHtml(languageLabel(language))}</option>
+          `).join("");
+          select.value = currentLanguage;
+        };
+
+        renderOptions();
+        select.addEventListener("change", (event) => {
+          currentLanguage = resolveLanguage(event.target.value);
+          storeLanguage(currentLanguage);
+          renderOptions();
+          onChange();
+        });
+      }
+
       function fmtBytes(bytes) {
-        if (bytes == null) return "n/a";
+        if (bytes == null) return t("common.not_available");
         const units = ["B", "KB", "MB", "GB", "TB", "PB"];
         let value = Number(bytes);
         let index = 0;
@@ -611,17 +859,17 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
       }
 
       function fmtRate(bytes) {
-        if (bytes == null) return "n/a";
+        if (bytes == null) return t("common.not_available");
         return `${fmtBytes(bytes)}/s`;
       }
 
       function fmtPercent(value) {
-        if (value == null || Number.isNaN(Number(value))) return "n/a";
+        if (value == null || Number.isNaN(Number(value))) return t("common.not_available");
         return `${Number(value).toFixed(1)}%`;
       }
 
       function fmtLatency(value) {
-        if (value == null) return "n/a";
+        if (value == null) return t("common.not_available");
         return `${Math.round(value)} ms`;
       }
 
@@ -632,28 +880,35 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         });
       }
 
-      function currentWindow() {
+      function currentWindowHours() {
         return HISTORY_WINDOWS[chartState.windowIndex] || HISTORY_WINDOWS[2];
       }
 
-      function formatWindowLabel(windowOption) {
-        if (!windowOption) return "Last 24 hours";
-        if (windowOption.hours < 24) return `Last ${windowOption.hours} hours`;
-        if (windowOption.hours % 24 === 0) return `Last ${windowOption.hours / 24} days`;
-        return `Last ${windowOption.hours} hours`;
+      function formatWindowLongLabel(hours) {
+        if (hours < 24) {
+          return t("node.window.last_hours", { hours });
+        }
+        return t("node.window.last_days", { days: hours / 24 });
+      }
+
+      function formatWindowShortLabel(hours) {
+        if (hours < 24) {
+          return t("node.window.short_hours", { hours });
+        }
+        return t("node.window.short_days", { days: hours / 24 });
       }
 
       function renderWindowLegend() {
-        document.getElementById("history-window-legend").innerHTML = HISTORY_WINDOWS.map((windowOption, index) => `
-          <div class="window-chip ${index === chartState.windowIndex ? "active" : ""}">${escapeHtml(windowOption.label)}</div>
+        document.getElementById("history-window-legend").innerHTML = HISTORY_WINDOWS.map((hours, index) => `
+          <div class="window-chip ${index === chartState.windowIndex ? "active" : ""}">${escapeHtml(formatWindowShortLabel(hours))}</div>
         `).join("");
       }
 
       function syncControls() {
         document.getElementById("history-window-slider").value = String(chartState.windowIndex);
-        document.getElementById("history-window-value").textContent = formatWindowLabel(currentWindow());
+        document.getElementById("history-window-value").textContent = formatWindowLongLabel(currentWindowHours());
         const toggle = document.getElementById("peak-clip-toggle");
-        toggle.textContent = chartState.peakClipEnabled ? "Clip Spikes: On" : "Clip Spikes: Off";
+        toggle.textContent = chartState.peakClipEnabled ? t("node.clip.on") : t("node.clip.off");
         toggle.classList.toggle("active", chartState.peakClipEnabled);
         renderWindowLegend();
       }
@@ -690,7 +945,7 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
 
       function renderSparkline(points, colors, formatter, options = {}) {
         if (!Array.isArray(points) || points.length === 0) {
-          return `<div class="empty">Waiting for enough history samples…</div>`;
+          return `<div class="empty">${escapeHtml(t("node.waiting_history"))}</div>`;
         }
 
         const width = 640;
@@ -698,11 +953,11 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         const padding = 16;
         const allValues = points.flatMap((point) => point.values).filter((value) => value != null);
         if (allValues.length === 0) {
-          return `<div class="empty">No numeric history yet.</div>`;
+          return `<div class="empty">${escapeHtml(t("node.no_numeric_history"))}</div>`;
         }
+
         const bounds = chartBounds(allValues, options.clipSpikes);
         const span = Math.max(bounds.displayMax - bounds.displayMin, 1);
-
         const series = colors.map((color, seriesIndex) => {
           let started = false;
           const path = points.map((point, pointIndex) => {
@@ -719,8 +974,15 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         }).join("");
 
         const footer = bounds.clipped
-          ? `${formatter(bounds.displayMin)} → ${formatter(bounds.displayMax)} · clipped from ${formatter(bounds.actualMax)}`
-          : `${formatter(bounds.displayMin)} → ${formatter(bounds.actualMax)}`;
+          ? t("node.chart.clipped_range", {
+              start: formatter(bounds.displayMin),
+              end: formatter(bounds.displayMax),
+              peak: formatter(bounds.actualMax),
+            })
+          : t("node.chart.range", {
+              start: formatter(bounds.displayMin),
+              end: formatter(bounds.actualMax),
+            });
 
         return `
           <svg viewBox="0 0 ${width} ${height}" width="100%" height="100%" preserveAspectRatio="none" aria-hidden="true">
@@ -735,14 +997,14 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         const snapshot = node.snapshot || {};
         const memory = snapshot.memory || {};
         const cards = [
-          ["CPU", fmtPercent(snapshot.cpu_usage_percent)],
-          ["Load 1/5/15", snapshot.load ? `${snapshot.load.one.toFixed(2)} / ${snapshot.load.five.toFixed(2)} / ${snapshot.load.fifteen.toFixed(2)}` : "n/a"],
-          ["Download / Upload", `${fmtRate(snapshot.network?.rx_bytes_per_sec)} / ${fmtRate(snapshot.network?.tx_bytes_per_sec)}`],
-          ["Latency", fmtLatency(node.latency_ms)],
-          ["Memory", `${fmtBytes(memory.used_bytes)} / ${fmtBytes(memory.total_bytes)}`],
-          ["Swap", `${fmtBytes(memory.swap_used_bytes)} / ${fmtBytes(memory.swap_total_bytes)}`],
-          ["Uptime", snapshot.uptime_secs != null ? `${Math.round(snapshot.uptime_secs / 3600)}h` : "n/a"],
-          ["Agent", node.identity.agent_version || "n/a"],
+          [t("node.stats.cpu"), fmtPercent(snapshot.cpu_usage_percent)],
+          [t("node.stats.load"), snapshot.load ? `${snapshot.load.one.toFixed(2)} / ${snapshot.load.five.toFixed(2)} / ${snapshot.load.fifteen.toFixed(2)}` : t("common.not_available")],
+          [t("node.stats.download_upload"), `${fmtRate(snapshot.network?.rx_bytes_per_sec)} / ${fmtRate(snapshot.network?.tx_bytes_per_sec)}`],
+          [t("node.stats.latency"), fmtLatency(node.latency_ms)],
+          [t("node.stats.memory"), `${fmtBytes(memory.used_bytes)} / ${fmtBytes(memory.total_bytes)}`],
+          [t("node.stats.swap"), `${fmtBytes(memory.swap_used_bytes)} / ${fmtBytes(memory.swap_total_bytes)}`],
+          [t("node.stats.uptime"), snapshot.uptime_secs != null ? `${Math.round(snapshot.uptime_secs / 3600)}h` : t("common.not_available")],
+          [t("node.stats.agent"), node.identity.agent_version || t("common.not_available")],
         ];
         document.getElementById("stats").innerHTML = cards.map(([label, value]) => `
           <article class="panel">
@@ -756,18 +1018,18 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         const disks = node.snapshot?.disks || [];
         const root = document.getElementById("disks");
         if (disks.length === 0) {
-          root.innerHTML = `<div class="empty">No disk metrics reported yet.</div>`;
+          root.innerHTML = `<div class="empty">${escapeHtml(t("node.no_disks"))}</div>`;
           return;
         }
         root.innerHTML = `
           <table>
             <thead>
               <tr>
-                <th>Device</th>
-                <th>Mount</th>
-                <th>Filesystem</th>
-                <th>Usage</th>
-                <th>Capacity</th>
+                <th>${escapeHtml(t("node.disk.device"))}</th>
+                <th>${escapeHtml(t("node.disk.mount"))}</th>
+                <th>${escapeHtml(t("node.disk.filesystem"))}</th>
+                <th>${escapeHtml(t("node.disk.usage"))}</th>
+                <th>${escapeHtml(t("node.disk.capacity"))}</th>
               </tr>
             </thead>
             <tbody>
@@ -812,6 +1074,40 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         );
       }
 
+      function renderNodeHeader(node) {
+        document.getElementById("title").textContent = node.identity.node_label || t("common.node_unavailable");
+        document.getElementById("meta").innerHTML = `
+          ${escapeHtml(node.identity.node_id)} · ${escapeHtml(node.identity.hostname || t("common.unknown_host"))} ·
+          ${escapeHtml(node.identity.os || t("common.unknown_os"))} ·
+          ${escapeHtml(node.online ? t("common.online") : t("common.offline"))}
+        `;
+      }
+
+      function renderUpdatedAt(node) {
+        document.getElementById("updated").textContent = node.last_seen
+          ? t("common.last_seen", { time: new Date(node.last_seen).toLocaleString() })
+          : t("common.no_heartbeat_yet");
+      }
+
+      function rerenderNode() {
+        document.documentElement.lang = currentLanguage;
+        document.title = t("node.page_title");
+        document.querySelectorAll("[data-i18n]").forEach((element) => {
+          element.textContent = t(element.dataset.i18n);
+        });
+        syncControls();
+        if (latestNode) {
+          renderNodeHeader(latestNode);
+          renderUpdatedAt(latestNode);
+          renderStats(latestNode);
+          renderDisks(latestNode);
+        } else {
+          document.getElementById("updated").textContent = t("common.waiting_for_node_data");
+          document.getElementById("title").textContent = t("node.loading");
+        }
+        renderHistory(latestHistory);
+      }
+
       function scheduleRefresh() {
         if (refreshTimer != null) {
           window.clearTimeout(refreshTimer);
@@ -844,36 +1140,35 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
       async function refresh() {
         try {
           const historyParams = new URLSearchParams({
-            window_hours: String(currentWindow().hours),
+            window_hours: String(currentWindowHours()),
             max_points: String(HISTORY_MAX_POINTS),
           });
           const [node, history] = await Promise.all([
             fetchJson(`/api/nodes/${encodeURIComponent(NODE_ID)}`),
             fetchJson(`/api/nodes/${encodeURIComponent(NODE_ID)}/history?${historyParams.toString()}`),
           ]);
+          latestNode = node;
           latestHistory = history;
-          document.getElementById("title").textContent = node.identity.node_label;
-          document.getElementById("meta").innerHTML = `
-            ${escapeHtml(node.identity.node_id)} · ${escapeHtml(node.identity.hostname || "unknown host")} ·
-            ${escapeHtml(node.identity.os || "unknown os")} ·
-            ${escapeHtml(node.online ? "online" : "offline")}
-          `;
-          document.getElementById("updated").textContent = node.last_seen
-            ? `Last seen ${new Date(node.last_seen).toLocaleString()}`
-            : "No heartbeat yet";
-          renderStats(node);
-          renderDisks(node);
-          renderHistory(history);
+          rerenderNode();
         } catch (error) {
-          document.getElementById("title").textContent = "Node unavailable";
+          document.getElementById("title").textContent = t("common.node_unavailable");
           document.getElementById("meta").textContent = error.message;
         } finally {
           scheduleRefresh();
         }
       }
 
-      bindControls();
-      refresh();
+      async function init() {
+        await loadI18n();
+        bindLanguageSelector(() => {
+          rerenderNode();
+        });
+        bindControls();
+        rerenderNode();
+        refresh();
+      }
+
+      init();
     </script>
   </body>
 </html>
