@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use axum::extract::ConnectInfo;
+use axum::extract::Query;
 use axum::extract::Request;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
@@ -23,7 +24,7 @@ use axum::{Json, Router};
 use base64::Engine;
 use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::time::interval;
@@ -149,6 +150,15 @@ const INSTALL_AGENT_SCRIPT: &str = include_str!("../../scripts/install-agent.sh"
 const HELLO_TIMEOUT_SECS: u64 = 10;
 const MAX_OUTSTANDING_PINGS: usize = 32;
 const INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
+const DEFAULT_HISTORY_WINDOW_HOURS: u64 = 24;
+const DEFAULT_HISTORY_MAX_POINTS: usize = 480;
+const MAX_HISTORY_MAX_POINTS: usize = 1440;
+
+#[derive(Debug, Deserialize, Default)]
+struct HistoryQuery {
+    window_hours: Option<u64>,
+    max_points: Option<usize>,
+}
 
 impl From<anyhow::Error> for ProtocolError {
     fn from(error: anyhow::Error) -> Self {
@@ -593,8 +603,19 @@ async fn node_status(
 async fn node_history(
     State(state): State<AppState>,
     AxumPath(node_id): AxumPath<String>,
+    Query(query): Query<HistoryQuery>,
 ) -> Response {
-    match state.history.query_recent_history(&node_id).await {
+    let window_hours = query.window_hours.unwrap_or(DEFAULT_HISTORY_WINDOW_HOURS);
+    let max_points = query
+        .max_points
+        .unwrap_or(DEFAULT_HISTORY_MAX_POINTS)
+        .clamp(60, MAX_HISTORY_MAX_POINTS);
+
+    match state
+        .history
+        .query_history(&node_id, window_hours, max_points)
+        .await
+    {
         Ok(points) => Json(points).into_response(),
         Err(error) => {
             error!(node_id = %node_id, error = ?error, "failed to query node history");

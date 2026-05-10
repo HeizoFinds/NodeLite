@@ -107,16 +107,25 @@ impl HistoryStore {
         }
     }
 
-    pub async fn query_recent_history(&self, node_id: &str) -> Result<Vec<HistoryPoint>> {
+    pub async fn query_history(
+        &self,
+        node_id: &str,
+        window_hours: u64,
+        max_points: usize,
+    ) -> Result<Vec<HistoryPoint>> {
         if !self.is_available() {
             return Ok(Vec::new());
         }
 
         let db_path = Arc::clone(&self.db_path);
         let node_id = node_id.to_string();
-        let since = Utc::now() - chrono::Duration::hours(DEFAULT_HISTORY_RETENTION_HOURS as i64);
+        let clamped_window_hours = window_hours.clamp(1, DEFAULT_HISTORY_RETENTION_HOURS);
+        let clamped_max_points = max_points.max(60);
+        let since = Utc::now() - chrono::Duration::hours(clamped_window_hours as i64);
 
-        tokio::task::spawn_blocking(move || query_history(db_path.as_ref(), &node_id, since))
+        tokio::task::spawn_blocking(move || {
+            query_history(db_path.as_ref(), &node_id, since, clamped_max_points)
+        })
             .await
             .context("history query task failed")?
     }
@@ -217,6 +226,7 @@ fn query_history(
     db_path: &PathBuf,
     node_id: &str,
     since: DateTime<Utc>,
+    max_points: usize,
 ) -> Result<Vec<HistoryPoint>> {
     let connection = open_database_connection(db_path, false)?;
     let mut statement = connection.prepare(
@@ -256,7 +266,7 @@ fn query_history(
     for row in rows {
         points.push(row?);
     }
-    Ok(points)
+    Ok(condense_history_points(points, max_points))
 }
 
 fn open_database_connection(db_path: &PathBuf, enable_wal: bool) -> Result<Connection> {
@@ -291,6 +301,78 @@ fn build_history_point(status: &NodeStatus) -> Option<HistoryPoint> {
         latency_ms: status.latency_ms,
         disk_used_percent,
     })
+}
+
+fn condense_history_points(points: Vec<HistoryPoint>, max_points: usize) -> Vec<HistoryPoint> {
+    let target_points = max_points.max(1);
+    if points.len() <= target_points {
+        return points;
+    }
+
+    let bucket_size = points.len().div_ceil(target_points);
+    let mut condensed = Vec::with_capacity(points.len().div_ceil(bucket_size));
+
+    for chunk in points.chunks(bucket_size) {
+        condensed.push(average_history_chunk(chunk));
+    }
+
+    condensed
+}
+
+fn average_history_chunk(chunk: &[HistoryPoint]) -> HistoryPoint {
+    let first = &chunk[0];
+    let recorded_at = chunk
+        .last()
+        .map(|point| point.recorded_at)
+        .unwrap_or(first.recorded_at);
+
+    HistoryPoint {
+        node_id: first.node_id.clone(),
+        recorded_at,
+        cpu_usage_percent: average_f64(chunk.iter().map(|point| point.cpu_usage_percent)),
+        memory_used_percent: average_f64(chunk.iter().map(|point| point.memory_used_percent)),
+        rx_bytes_per_sec: average_optional_f64(chunk.iter().map(|point| point.rx_bytes_per_sec)),
+        tx_bytes_per_sec: average_optional_f64(chunk.iter().map(|point| point.tx_bytes_per_sec)),
+        latency_ms: average_optional_u64(chunk.iter().map(|point| point.latency_ms)),
+        disk_used_percent: average_optional_f64(chunk.iter().map(|point| point.disk_used_percent)),
+    }
+}
+
+fn average_f64(values: impl Iterator<Item = f64>) -> f64 {
+    let mut total = 0.0;
+    let mut count = 0_u64;
+    for value in values {
+        total += value;
+        count += 1;
+    }
+
+    if count == 0 {
+        0.0
+    } else {
+        total / count as f64
+    }
+}
+
+fn average_optional_f64(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
+    let mut total = 0.0;
+    let mut count = 0_u64;
+    for value in values.flatten() {
+        total += value;
+        count += 1;
+    }
+
+    (count > 0).then(|| total / count as f64)
+}
+
+fn average_optional_u64(values: impl Iterator<Item = Option<u64>>) -> Option<u64> {
+    let mut total = 0_u128;
+    let mut count = 0_u64;
+    for value in values.flatten() {
+        total += value as u128;
+        count += 1;
+    }
+
+    (count > 0).then(|| (total / count as u128) as u64)
 }
 
 #[cfg(test)]
