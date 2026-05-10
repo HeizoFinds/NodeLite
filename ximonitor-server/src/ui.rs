@@ -363,6 +363,11 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         gap: 18px;
         margin-bottom: 18px;
       }
+      .topline-actions {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
       .topline .back {
         text-decoration: none;
         color: var(--muted);
@@ -415,6 +420,60 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         grid-template-columns: repeat(2, minmax(0, 1fr));
         margin-bottom: 18px;
       }
+      .controls-panel {
+        margin-bottom: 18px;
+      }
+      .controls-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: center;
+      }
+      .control-value {
+        margin-top: 8px;
+        font-size: 1.28rem;
+        font-weight: 700;
+        letter-spacing: -0.03em;
+      }
+      .toggle-button {
+        border: 1px solid rgba(26, 32, 43, 0.12);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.75);
+        color: var(--ink);
+        padding: 12px 16px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+      }
+      .toggle-button.active {
+        background: rgba(15, 118, 110, 0.12);
+        border-color: rgba(15, 118, 110, 0.28);
+        color: var(--accent);
+      }
+      .window-slider {
+        width: 100%;
+        margin-top: 18px;
+        accent-color: var(--accent);
+      }
+      .window-legend {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .window-chip {
+        border-radius: 999px;
+        padding: 8px 10px;
+        font-size: 0.82rem;
+        text-align: center;
+        color: var(--muted);
+        background: rgba(93, 104, 117, 0.08);
+      }
+      .window-chip.active {
+        color: var(--accent);
+        background: rgba(15, 118, 110, 0.12);
+      }
       .chart-box {
         height: 210px;
         margin-top: 14px;
@@ -446,10 +505,17 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
       }
       @media (max-width: 960px) {
         .stats, .charts { grid-template-columns: 1fr; }
+        .window-legend { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       }
       @media (max-width: 720px) {
         .shell { width: calc(100vw - 20px); }
         .topline { display: block; }
+        .topline-actions {
+          justify-content: space-between;
+          margin-top: 12px;
+        }
+        .controls-head { display: block; }
+        .toggle-button { margin-top: 14px; width: 100%; }
       }
     </style>
   </head>
@@ -466,6 +532,18 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
       </section>
 
       <section class="stats" id="stats"></section>
+
+      <section class="panel controls-panel">
+        <div class="controls-head">
+          <div>
+            <div class="label">History Window</div>
+            <div class="control-value" id="history-window-value">Last 24 hours</div>
+          </div>
+          <button type="button" class="toggle-button" id="peak-clip-toggle">Clip Spikes: Off</button>
+        </div>
+        <input class="window-slider" id="history-window-slider" type="range" min="0" max="5" step="1" value="2" />
+        <div class="window-legend" id="history-window-legend"></div>
+      </section>
 
       <section class="charts">
         <article class="panel">
@@ -495,6 +573,21 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
     <script>
       const NODE_ID = __NODE_ID_JSON__;
       const REFRESH_MS = __REFRESH_MS__;
+      const HISTORY_MAX_POINTS = 480;
+      const HISTORY_WINDOWS = [
+        { hours: 6, label: "6h" },
+        { hours: 12, label: "12h" },
+        { hours: 24, label: "24h" },
+        { hours: 72, label: "3d" },
+        { hours: 168, label: "7d" },
+        { hours: 336, label: "14d" },
+      ];
+      const chartState = {
+        windowIndex: 2,
+        peakClipEnabled: false,
+      };
+      let latestHistory = [];
+      let refreshTimer = null;
 
       function escapeHtml(value) {
         return String(value)
@@ -539,7 +632,63 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         });
       }
 
-      function renderSparkline(points, colors, formatter) {
+      function currentWindow() {
+        return HISTORY_WINDOWS[chartState.windowIndex] || HISTORY_WINDOWS[2];
+      }
+
+      function formatWindowLabel(windowOption) {
+        if (!windowOption) return "Last 24 hours";
+        if (windowOption.hours < 24) return `Last ${windowOption.hours} hours`;
+        if (windowOption.hours % 24 === 0) return `Last ${windowOption.hours / 24} days`;
+        return `Last ${windowOption.hours} hours`;
+      }
+
+      function renderWindowLegend() {
+        document.getElementById("history-window-legend").innerHTML = HISTORY_WINDOWS.map((windowOption, index) => `
+          <div class="window-chip ${index === chartState.windowIndex ? "active" : ""}">${escapeHtml(windowOption.label)}</div>
+        `).join("");
+      }
+
+      function syncControls() {
+        document.getElementById("history-window-slider").value = String(chartState.windowIndex);
+        document.getElementById("history-window-value").textContent = formatWindowLabel(currentWindow());
+        const toggle = document.getElementById("peak-clip-toggle");
+        toggle.textContent = chartState.peakClipEnabled ? "Clip Spikes: On" : "Clip Spikes: Off";
+        toggle.classList.toggle("active", chartState.peakClipEnabled);
+        renderWindowLegend();
+      }
+
+      function quantile(values, ratio) {
+        if (!Array.isArray(values) || values.length === 0) return null;
+        const sorted = [...values].sort((left, right) => left - right);
+        const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * ratio) - 1));
+        return sorted[index];
+      }
+
+      function chartBounds(values, clipSpikes) {
+        const actualMin = Math.min(...values);
+        const actualMax = Math.max(...values);
+        let displayMax = actualMax;
+        let clipped = false;
+
+        if (clipSpikes && values.length >= 12) {
+          const clippedMax = quantile(values, 0.98);
+          if (clippedMax != null && clippedMax > actualMin && clippedMax < actualMax) {
+            displayMax = clippedMax;
+            clipped = true;
+          }
+        }
+
+        return {
+          actualMin,
+          actualMax,
+          displayMin: actualMin,
+          displayMax,
+          clipped,
+        };
+      }
+
+      function renderSparkline(points, colors, formatter, options = {}) {
         if (!Array.isArray(points) || points.length === 0) {
           return `<div class="empty">Waiting for enough history samples…</div>`;
         }
@@ -551,17 +700,17 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         if (allValues.length === 0) {
           return `<div class="empty">No numeric history yet.</div>`;
         }
-        const min = Math.min(...allValues);
-        const max = Math.max(...allValues);
-        const span = Math.max(max - min, 1);
+        const bounds = chartBounds(allValues, options.clipSpikes);
+        const span = Math.max(bounds.displayMax - bounds.displayMin, 1);
 
         const series = colors.map((color, seriesIndex) => {
           let started = false;
           const path = points.map((point, pointIndex) => {
             const value = point.values[seriesIndex];
             if (value == null) return null;
+            const plottedValue = Math.min(Math.max(value, bounds.displayMin), bounds.displayMax);
             const x = padding + ((width - padding * 2) * pointIndex) / Math.max(points.length - 1, 1);
-            const y = height - padding - (((value - min) / span) * (height - padding * 2));
+            const y = height - padding - (((plottedValue - bounds.displayMin) / span) * (height - padding * 2));
             const command = started ? "L" : "M";
             started = true;
             return `${command}${x.toFixed(1)},${y.toFixed(1)}`;
@@ -569,12 +718,16 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
           return `<path d="${path}" fill="none" stroke="${color}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" />`;
         }).join("");
 
+        const footer = bounds.clipped
+          ? `${formatter(bounds.displayMin)} → ${formatter(bounds.displayMax)} · clipped from ${formatter(bounds.actualMax)}`
+          : `${formatter(bounds.displayMin)} → ${formatter(bounds.actualMax)}`;
+
         return `
           <svg viewBox="0 0 ${width} ${height}" width="100%" height="100%" preserveAspectRatio="none" aria-hidden="true">
             <rect x="0" y="0" width="${width}" height="${height}" fill="transparent" />
             ${series}
           </svg>
-          <div style="position:absolute;left:18px;bottom:16px;font-size:0.82rem;color:#5d6875;">${escapeHtml(formatter(min))} → ${escapeHtml(formatter(max))}</div>
+          <div style="position:absolute;left:18px;bottom:16px;font-size:0.82rem;color:#5d6875;">${escapeHtml(footer)}</div>
         `;
       }
 
@@ -636,31 +789,69 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         document.getElementById("chart-cpu").innerHTML = renderSparkline(
           history.map((point) => ({ values: [point.cpu_usage_percent] })),
           ["var(--chart-a)"],
-          (value) => `${value.toFixed(1)}%`
+          (value) => `${value.toFixed(1)}%`,
+          { clipSpikes: chartState.peakClipEnabled }
         );
         document.getElementById("chart-memory").innerHTML = renderSparkline(
           history.map((point) => ({ values: [point.memory_used_percent] })),
           ["var(--chart-b)"],
-          (value) => `${value.toFixed(1)}%`
+          (value) => `${value.toFixed(1)}%`,
+          { clipSpikes: chartState.peakClipEnabled }
         );
         document.getElementById("chart-network").innerHTML = renderSparkline(
           history.map((point) => ({ values: [point.rx_bytes_per_sec, point.tx_bytes_per_sec] })),
           ["var(--chart-c)", "var(--chart-a)"],
-          (value) => fmtRate(value)
+          (value) => fmtRate(value),
+          { clipSpikes: chartState.peakClipEnabled }
         );
         document.getElementById("chart-latency").innerHTML = renderSparkline(
           history.map((point) => ({ values: [point.latency_ms] })),
           ["var(--chart-d)"],
-          (value) => `${Math.round(value)} ms`
+          (value) => `${Math.round(value)} ms`,
+          { clipSpikes: chartState.peakClipEnabled }
         );
+      }
+
+      function scheduleRefresh() {
+        if (refreshTimer != null) {
+          window.clearTimeout(refreshTimer);
+        }
+        refreshTimer = window.setTimeout(refresh, REFRESH_MS);
+      }
+
+      function requestHistoryRefresh() {
+        if (refreshTimer != null) {
+          window.clearTimeout(refreshTimer);
+        }
+        refresh();
+      }
+
+      function bindControls() {
+        const slider = document.getElementById("history-window-slider");
+        slider.addEventListener("input", (event) => {
+          chartState.windowIndex = Number(event.target.value);
+          syncControls();
+        });
+        slider.addEventListener("change", requestHistoryRefresh);
+        document.getElementById("peak-clip-toggle").addEventListener("click", () => {
+          chartState.peakClipEnabled = !chartState.peakClipEnabled;
+          syncControls();
+          renderHistory(latestHistory);
+        });
+        syncControls();
       }
 
       async function refresh() {
         try {
+          const historyParams = new URLSearchParams({
+            window_hours: String(currentWindow().hours),
+            max_points: String(HISTORY_MAX_POINTS),
+          });
           const [node, history] = await Promise.all([
             fetchJson(`/api/nodes/${encodeURIComponent(NODE_ID)}`),
-            fetchJson(`/api/nodes/${encodeURIComponent(NODE_ID)}/history`),
+            fetchJson(`/api/nodes/${encodeURIComponent(NODE_ID)}/history?${historyParams.toString()}`),
           ]);
+          latestHistory = history;
           document.getElementById("title").textContent = node.identity.node_label;
           document.getElementById("meta").innerHTML = `
             ${escapeHtml(node.identity.node_id)} · ${escapeHtml(node.identity.hostname || "unknown host")} ·
@@ -677,10 +868,11 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
           document.getElementById("title").textContent = "Node unavailable";
           document.getElementById("meta").textContent = error.message;
         } finally {
-          window.setTimeout(refresh, REFRESH_MS);
+          scheduleRefresh();
         }
       }
 
+      bindControls();
       refresh();
     </script>
   </body>
