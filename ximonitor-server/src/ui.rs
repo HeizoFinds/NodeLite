@@ -890,6 +890,19 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         return `${Math.round(value)} ms`;
       }
 
+      function fmtUptime(seconds) {
+        if (seconds == null || Number.isNaN(Number(seconds))) {
+          return t("common.not_available");
+        }
+        const totalHours = Math.floor(Number(seconds) / 3600);
+        const days = Math.floor(totalHours / 24);
+        const hours = totalHours % 24;
+        if (days > 0) {
+          return t("node.uptime.days_hours", { days, hours });
+        }
+        return t("node.uptime.hours", { hours: totalHours });
+      }
+
       function fmtDateTime(value) {
         return new Date(value).toLocaleString(currentLanguage);
       }
