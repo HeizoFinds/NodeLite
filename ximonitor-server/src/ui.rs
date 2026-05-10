@@ -606,13 +606,49 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         display: flex;
         justify-content: space-between;
         gap: 18px;
-        align-items: center;
+        align-items: start;
       }
       .control-value {
         margin-top: 8px;
         font-size: 1.28rem;
         font-weight: 700;
         letter-spacing: -0.03em;
+      }
+      .control-subtle {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+      .controls-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        justify-content: end;
+      }
+      .preset-group {
+        display: inline-flex;
+        border: 1px solid rgba(26, 32, 43, 0.12);
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.7);
+      }
+      .preset-button {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        padding: 11px 16px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 160ms ease, color 160ms ease;
+      }
+      .preset-button + .preset-button {
+        border-left: 1px solid rgba(26, 32, 43, 0.08);
+      }
+      .preset-button.active {
+        background: rgba(15, 118, 110, 0.14);
+        color: var(--accent);
       }
       .toggle-button {
         border: 1px solid rgba(26, 32, 43, 0.12);
@@ -630,28 +666,84 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         border-color: rgba(15, 118, 110, 0.28);
         color: var(--accent);
       }
-      .window-slider {
-        width: 100%;
+      .brush-shell {
         margin-top: 18px;
-        accent-color: var(--accent);
+        padding: 16px 0 6px;
       }
-      .window-legend {
-        display: grid;
-        grid-template-columns: repeat(6, minmax(0, 1fr));
-        gap: 8px;
-        margin-top: 12px;
+      .brush-stage {
+        position: relative;
+        height: 118px;
+        border-radius: 20px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.42), rgba(241,244,246,0.88));
+        border: 1px solid rgba(26, 32, 43, 0.07);
+        overflow: hidden;
       }
-      .window-chip {
-        border-radius: 999px;
-        padding: 8px 10px;
-        font-size: 0.82rem;
-        text-align: center;
-        color: var(--muted);
-        background: rgba(93, 104, 117, 0.08);
+      .brush-chart {
+        position: absolute;
+        inset: 0;
       }
-      .window-chip.active {
-        color: var(--accent);
+      .brush-selection {
+        position: absolute;
+        top: 10px;
+        bottom: 10px;
+        border-radius: 16px;
         background: rgba(15, 118, 110, 0.12);
+        border: 2px solid rgba(15, 118, 110, 0.45);
+        box-shadow: inset 0 0 0 999px rgba(255,255,255,0.1);
+        cursor: grab;
+      }
+      .brush-selection.dragging {
+        cursor: grabbing;
+      }
+      .brush-selection::before,
+      .brush-selection::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 12px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(230, 236, 239, 0.96));
+      }
+      .brush-selection::before {
+        left: -12px;
+        box-shadow: -999px 0 0 rgba(255,255,255,0.48);
+      }
+      .brush-selection::after {
+        right: -12px;
+        box-shadow: 999px 0 0 rgba(255,255,255,0.48);
+      }
+      .brush-handle {
+        position: absolute;
+        top: 50%;
+        width: 18px;
+        height: 42px;
+        margin-top: -21px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.96);
+        border: 1px solid rgba(26, 32, 43, 0.18);
+        box-shadow: 0 10px 22px rgba(26, 32, 43, 0.14);
+        cursor: ew-resize;
+      }
+      .brush-handle::before {
+        content: "";
+        position: absolute;
+        top: 11px;
+        bottom: 11px;
+        left: 50%;
+        width: 2px;
+        margin-left: -1px;
+        background: rgba(26, 32, 43, 0.28);
+        box-shadow: -4px 0 0 rgba(26, 32, 43, 0.18), 4px 0 0 rgba(26, 32, 43, 0.18);
+      }
+      .brush-handle.start { left: -10px; }
+      .brush-handle.end { right: -10px; }
+      .brush-labels {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 0.86rem;
       }
       .charts {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -688,7 +780,6 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
       }
       @media (max-width: 960px) {
         .stats, .charts { grid-template-columns: 1fr; }
-        .window-legend { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       }
       @media (max-width: 720px) {
         .shell { width: calc(100vw - 20px); }
@@ -698,7 +789,19 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
           margin-top: 12px;
         }
         .controls-head { display: block; }
-        .toggle-button { margin-top: 14px; width: 100%; }
+        .controls-actions {
+          justify-content: start;
+          margin-top: 14px;
+        }
+        .preset-group {
+          width: 100%;
+          flex-wrap: wrap;
+          border-radius: 18px;
+        }
+        .preset-button {
+          flex: 1 0 50%;
+        }
+        .toggle-button { width: 100%; }
       }
     </style>
   </head>
@@ -727,11 +830,26 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
           <div>
             <div class="label" data-i18n="node.history_window">History Window</div>
             <div class="control-value" id="history-window-value">Last 24 hours</div>
+            <div class="control-subtle" id="history-window-range">--</div>
           </div>
-          <button type="button" class="toggle-button" id="peak-clip-toggle">Clip Spikes: Off</button>
+          <div class="controls-actions">
+            <div class="preset-group" id="history-presets"></div>
+            <button type="button" class="toggle-button" id="peak-clip-toggle">Clip Spikes: Off</button>
+          </div>
         </div>
-        <input class="window-slider" id="history-window-slider" type="range" min="0" max="5" step="1" value="2" />
-        <div class="window-legend" id="history-window-legend"></div>
+        <div class="brush-shell">
+          <div class="brush-stage" id="history-brush-stage">
+            <div class="brush-chart" id="history-brush-chart"></div>
+            <div class="brush-selection" id="history-brush-selection">
+              <div class="brush-handle start" data-handle="start"></div>
+              <div class="brush-handle end" data-handle="end"></div>
+            </div>
+          </div>
+          <div class="brush-labels">
+            <span id="history-brush-start">--</span>
+            <span id="history-brush-end">--</span>
+          </div>
+        </div>
       </section>
 
       <section class="charts">
@@ -764,16 +882,30 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
       const REFRESH_MS = __REFRESH_MS__;
       const I18N_ASSET_PATH = "__I18N_ASSET_PATH__";
       const LANGUAGE_STORAGE_KEY = "ximonitor.ui.language";
-      const HISTORY_MAX_POINTS = 480;
-      const HISTORY_WINDOWS = [6, 12, 24, 72, 168, 336];
+      const RETENTION_WINDOW_HOURS = 24 * 14;
+      const OVERVIEW_HISTORY_MAX_POINTS = 1440;
+      const DETAIL_HISTORY_MAX_POINTS = 720;
+      const MIN_SELECTION_MS = 30 * 60 * 1000;
+      const CUSTOM_PRESET_KEY = "custom";
+      const PRESET_WINDOWS = [
+        { key: "last_24h", hours: 24 },
+        { key: "last_3d", hours: 72 },
+        { key: "last_7d", hours: 168 },
+        { key: "last_14d", hours: 336 }
+      ];
       let I18N = { en: { "__label": "English" } };
       let currentLanguage = "en";
       let latestNode = null;
+      let overviewHistory = [];
       let latestHistory = [];
       let refreshTimer = null;
+      let activeBrushDrag = null;
+      let detailRequestVersion = 0;
       const chartState = {
-        windowIndex: 2,
         peakClipEnabled: false,
+        activePresetKey: "last_24h",
+        selectedStartMs: null,
+        selectedEndMs: null
       };
 
       function escapeHtml(value) {
@@ -914,37 +1046,198 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         });
       }
 
-      function currentWindowHours() {
-        return HISTORY_WINDOWS[chartState.windowIndex] || HISTORY_WINDOWS[2];
-      }
-
-      function formatWindowLongLabel(hours) {
-        if (hours < 24) {
-          return t("node.window.last_hours", { hours });
+      function normalizeHistory(history) {
+        if (!Array.isArray(history)) {
+          return [];
         }
-        return t("node.window.last_days", { days: hours / 24 });
+        return history
+          .map((point) => ({
+            ...point,
+            _ts: Date.parse(point.recorded_at)
+          }))
+          .filter((point) => Number.isFinite(point._ts))
+          .sort((left, right) => left._ts - right._ts);
       }
 
-      function formatWindowShortLabel(hours) {
-        if (hours < 24) {
-          return t("node.window.short_hours", { hours });
+      function historyBounds(history) {
+        if (!Array.isArray(history) || history.length === 0) {
+          return null;
         }
-        return t("node.window.short_days", { days: hours / 24 });
+        return {
+          startMs: history[0]._ts,
+          endMs: history[history.length - 1]._ts
+        };
       }
 
-      function renderWindowLegend() {
-        document.getElementById("history-window-legend").innerHTML = HISTORY_WINDOWS.map((hours, index) => `
-          <div class="window-chip ${index === chartState.windowIndex ? "active" : ""}">${escapeHtml(formatWindowShortLabel(hours))}</div>
+      function findPreset(key) {
+        return PRESET_WINDOWS.find((preset) => preset.key === key) || null;
+      }
+
+      function selectionDurationMs() {
+        if (chartState.selectedStartMs == null || chartState.selectedEndMs == null) {
+          return 0;
+        }
+        return Math.max(chartState.selectedEndMs - chartState.selectedStartMs, 0);
+      }
+
+      function formatDurationLabel(durationMs) {
+        const totalMinutes = Math.max(1, Math.round(durationMs / 60000));
+        const days = Math.floor(totalMinutes / (24 * 60));
+        const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+        const minutes = totalMinutes % 60;
+
+        if (days > 0) {
+          return t("node.window.span_days_hours", { days, hours });
+        }
+        if (hours > 0) {
+          return t("node.window.span_hours_minutes", { hours, minutes });
+        }
+        return t("node.window.span_minutes", { minutes: totalMinutes });
+      }
+
+      function formatWindowHeadline() {
+        const preset = findPreset(chartState.activePresetKey);
+        if (preset) {
+          if (preset.hours < 24) {
+            return t("node.window.last_hours", { hours: preset.hours });
+          }
+          return t("node.window.last_days", { days: preset.hours / 24 });
+        }
+        return t("node.window.custom", { span: formatDurationLabel(selectionDurationMs()) });
+      }
+
+      function clampSelection(startMs, endMs) {
+        const bounds = historyBounds(overviewHistory);
+        if (!bounds) {
+          return null;
+        }
+        if (bounds.endMs <= bounds.startMs) {
+          return {
+            startMs: bounds.startMs,
+            endMs: bounds.endMs
+          };
+        }
+
+        const minSpan = Math.min(MIN_SELECTION_MS, bounds.endMs - bounds.startMs);
+        let clampedStart = Math.max(bounds.startMs, Math.min(startMs, bounds.endMs));
+        let clampedEnd = Math.max(bounds.startMs, Math.min(endMs, bounds.endMs));
+
+        if (clampedEnd < clampedStart) {
+          const swap = clampedStart;
+          clampedStart = clampedEnd;
+          clampedEnd = swap;
+        }
+
+        if (clampedEnd - clampedStart < minSpan) {
+          clampedEnd = Math.min(bounds.endMs, clampedStart + minSpan);
+          clampedStart = Math.max(bounds.startMs, clampedEnd - minSpan);
+        }
+
+        return {
+          startMs: clampedStart,
+          endMs: clampedEnd
+        };
+      }
+
+      function renderPresetButtons() {
+        const root = document.getElementById("history-presets");
+        root.innerHTML = PRESET_WINDOWS.map((preset) => `
+          <button
+            type="button"
+            class="preset-button ${chartState.activePresetKey === preset.key ? "active" : ""}"
+            data-preset-key="${escapeHtml(preset.key)}"
+          >${escapeHtml(t(`node.preset.${preset.key}`))}</button>
         `).join("");
       }
 
+      function renderBrushOverview() {
+        const root = document.getElementById("history-brush-chart");
+        if (!Array.isArray(overviewHistory) || overviewHistory.length === 0) {
+          root.innerHTML = "";
+          return;
+        }
+
+        const width = 1000;
+        const height = 118;
+        const paddingX = 8;
+        const paddingY = 12;
+        const values = overviewHistory
+          .map((point) => point.cpu_usage_percent)
+          .filter((value) => value != null && Number.isFinite(Number(value)))
+          .map((value) => Number(value));
+
+        if (values.length === 0) {
+          root.innerHTML = "";
+          return;
+        }
+
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const span = Math.max(max - min, 1);
+
+        let started = false;
+        const linePath = overviewHistory.map((point, index) => {
+          const value = point.cpu_usage_percent;
+          if (value == null) {
+            return null;
+          }
+          const x = paddingX + ((width - paddingX * 2) * index) / Math.max(overviewHistory.length - 1, 1);
+          const y = height - paddingY - (((Number(value) - min) / span) * (height - paddingY * 2));
+          const command = started ? "L" : "M";
+          started = true;
+          return `${command}${x.toFixed(1)},${y.toFixed(1)}`;
+        }).filter(Boolean).join(" ");
+
+        const areaPath = `${linePath} L ${width - paddingX},${height - paddingY} L ${paddingX},${height - paddingY} Z`;
+
+        root.innerHTML = `
+          <svg viewBox="0 0 ${width} ${height}" width="100%" height="100%" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="brushGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="rgba(15,118,110,0.24)" />
+                <stop offset="100%" stop-color="rgba(15,118,110,0.04)" />
+              </linearGradient>
+            </defs>
+            <path d="${areaPath}" fill="url(#brushGradient)" stroke="none" />
+            <path d="${linePath}" fill="none" stroke="rgba(15,118,110,0.78)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        `;
+      }
+
+      function syncBrushSelection() {
+        const selection = document.getElementById("history-brush-selection");
+        const bounds = historyBounds(overviewHistory);
+        if (!bounds || chartState.selectedStartMs == null || chartState.selectedEndMs == null) {
+          selection.style.display = "none";
+          document.getElementById("history-brush-start").textContent = "--";
+          document.getElementById("history-brush-end").textContent = "--";
+          return;
+        }
+
+        selection.style.display = "block";
+        const totalSpan = Math.max(bounds.endMs - bounds.startMs, 1);
+        const leftPercent = ((chartState.selectedStartMs - bounds.startMs) / totalSpan) * 100;
+        const rightPercent = ((bounds.endMs - chartState.selectedEndMs) / totalSpan) * 100;
+        selection.style.left = `${Math.max(0, leftPercent)}%`;
+        selection.style.right = `${Math.max(0, rightPercent)}%`;
+        document.getElementById("history-brush-start").textContent = fmtDateTime(chartState.selectedStartMs);
+        document.getElementById("history-brush-end").textContent = fmtDateTime(chartState.selectedEndMs);
+      }
+
       function syncControls() {
-        document.getElementById("history-window-slider").value = String(chartState.windowIndex);
-        document.getElementById("history-window-value").textContent = formatWindowLongLabel(currentWindowHours());
+        document.getElementById("history-window-value").textContent = formatWindowHeadline();
+        document.getElementById("history-window-range").textContent =
+          chartState.selectedStartMs != null && chartState.selectedEndMs != null
+            ? t("node.window.range", {
+                start: fmtDateTime(chartState.selectedStartMs),
+                end: fmtDateTime(chartState.selectedEndMs)
+              })
+            : "--";
         const toggle = document.getElementById("peak-clip-toggle");
         toggle.textContent = chartState.peakClipEnabled ? t("node.clip.on") : t("node.clip.off");
         toggle.classList.toggle("active", chartState.peakClipEnabled);
-        renderWindowLegend();
+        renderPresetButtons();
+        syncBrushSelection();
       }
 
       function quantile(values, ratio) {
@@ -1027,6 +1320,37 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         `;
       }
 
+      function filterHistoryBySelection(history) {
+        if (!Array.isArray(history) || history.length === 0) {
+          return [];
+        }
+        if (chartState.selectedStartMs == null || chartState.selectedEndMs == null) {
+          return history;
+        }
+
+        const filtered = history.filter((point) => (
+          point._ts >= chartState.selectedStartMs && point._ts <= chartState.selectedEndMs
+        ));
+        if (filtered.length > 0) {
+          return filtered;
+        }
+
+        let before = null;
+        let after = null;
+        for (const point of history) {
+          if (point._ts < chartState.selectedStartMs) {
+            before = point;
+            continue;
+          }
+          if (point._ts > chartState.selectedEndMs) {
+            after = point;
+            break;
+          }
+        }
+
+        return [before, after].filter(Boolean);
+      }
+
       function renderStats(node) {
         const snapshot = node.snapshot || {};
         const memory = snapshot.memory || {};
@@ -1081,6 +1405,13 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         `;
       }
 
+      function displayedHistory() {
+        if (Array.isArray(latestHistory) && latestHistory.length > 0) {
+          return latestHistory;
+        }
+        return filterHistoryBySelection(overviewHistory);
+      }
+
       function renderHistory(history) {
         document.getElementById("chart-cpu").innerHTML = renderSparkline(
           history.map((point) => ({ values: [point.cpu_usage_percent] })),
@@ -1129,6 +1460,7 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         document.querySelectorAll("[data-i18n]").forEach((element) => {
           element.textContent = t(element.dataset.i18n);
         });
+        renderBrushOverview();
         syncControls();
         if (latestNode) {
           renderNodeHeader(latestNode);
@@ -1139,7 +1471,7 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
           document.getElementById("updated").textContent = t("common.waiting_for_node_data");
           document.getElementById("title").textContent = t("node.loading");
         }
-        renderHistory(latestHistory);
+        renderHistory(displayedHistory());
       }
 
       function scheduleRefresh() {
@@ -1149,47 +1481,249 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         refreshTimer = window.setTimeout(refresh, REFRESH_MS);
       }
 
-      function requestHistoryRefresh() {
-        if (refreshTimer != null) {
-          window.clearTimeout(refreshTimer);
+      function xToHistoryMs(clientX) {
+        const bounds = historyBounds(overviewHistory);
+        if (!bounds) {
+          return null;
         }
-        refresh();
+        const stage = document.getElementById("history-brush-stage");
+        const rect = stage.getBoundingClientRect();
+        if (rect.width <= 0) {
+          return bounds.endMs;
+        }
+        const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+        return bounds.startMs + ((bounds.endMs - bounds.startMs) * ratio);
+      }
+
+      function updateSelection(startMs, endMs, activePresetKey) {
+        const selection = clampSelection(startMs, endMs);
+        if (!selection) {
+          return false;
+        }
+        chartState.selectedStartMs = selection.startMs;
+        chartState.selectedEndMs = selection.endMs;
+        chartState.activePresetKey = activePresetKey;
+        return true;
+      }
+
+      function applyPresetWindow(presetKey, shouldFetch = true) {
+        const preset = findPreset(presetKey);
+        const bounds = historyBounds(overviewHistory);
+        if (!preset || !bounds) {
+          return;
+        }
+        const endMs = bounds.endMs;
+        const startMs = Math.max(bounds.startMs, endMs - (preset.hours * 3600 * 1000));
+        if (!updateSelection(startMs, endMs, preset.key)) {
+          return;
+        }
+        latestHistory = filterHistoryBySelection(overviewHistory);
+        rerenderNode();
+        if (shouldFetch) {
+          void fetchDetailHistory();
+        }
+      }
+
+      function ensureSelectionState() {
+        const bounds = historyBounds(overviewHistory);
+        if (!bounds) {
+          chartState.selectedStartMs = null;
+          chartState.selectedEndMs = null;
+          latestHistory = [];
+          return;
+        }
+
+        if (chartState.activePresetKey !== CUSTOM_PRESET_KEY) {
+          applyPresetWindow(chartState.activePresetKey, false);
+          return;
+        }
+
+        if (chartState.selectedStartMs == null || chartState.selectedEndMs == null) {
+          applyPresetWindow("last_24h", false);
+          return;
+        }
+
+        const selection = clampSelection(chartState.selectedStartMs, chartState.selectedEndMs);
+        if (selection) {
+          chartState.selectedStartMs = selection.startMs;
+          chartState.selectedEndMs = selection.endMs;
+          latestHistory = filterHistoryBySelection(overviewHistory);
+        }
+      }
+
+      async function fetchDetailHistory() {
+        const selection = clampSelection(chartState.selectedStartMs, chartState.selectedEndMs);
+        if (!selection) {
+          latestHistory = [];
+          rerenderNode();
+          return;
+        }
+
+        const requestVersion = ++detailRequestVersion;
+        const params = new URLSearchParams({
+          start: String(Math.floor(selection.startMs / 1000)),
+          end: String(Math.ceil(selection.endMs / 1000)),
+          max_points: String(DETAIL_HISTORY_MAX_POINTS)
+        });
+
+        try {
+          const history = normalizeHistory(
+            await fetchJson(`/api/nodes/${encodeURIComponent(NODE_ID)}/history?${params.toString()}`)
+          );
+          if (requestVersion !== detailRequestVersion) {
+            return;
+          }
+          latestHistory = history.length > 0 ? history : filterHistoryBySelection(overviewHistory);
+        } catch (error) {
+          console.warn("failed to refresh selected history; falling back to overview samples", error);
+          if (requestVersion !== detailRequestVersion) {
+            return;
+          }
+          latestHistory = filterHistoryBySelection(overviewHistory);
+        }
+
+        renderHistory(displayedHistory());
+      }
+
+      function beginBrushDrag(mode, event) {
+        const bounds = historyBounds(overviewHistory);
+        if (!bounds || chartState.selectedStartMs == null || chartState.selectedEndMs == null) {
+          return;
+        }
+
+        const pointerMs = xToHistoryMs(event.clientX);
+        if (pointerMs == null) {
+          return;
+        }
+
+        const selectionElement = document.getElementById("history-brush-selection");
+        selectionElement.classList.toggle("dragging", mode === "move");
+        activeBrushDrag = {
+          mode,
+          pointerOffsetMs: pointerMs - chartState.selectedStartMs,
+          selectionSpanMs: chartState.selectedEndMs - chartState.selectedStartMs
+        };
+
+        const onPointerMove = (moveEvent) => {
+          if (!activeBrushDrag) {
+            return;
+          }
+          const nextPointerMs = xToHistoryMs(moveEvent.clientX);
+          if (nextPointerMs == null) {
+            return;
+          }
+
+          if (activeBrushDrag.mode === "start") {
+            updateSelection(nextPointerMs, chartState.selectedEndMs, CUSTOM_PRESET_KEY);
+          } else if (activeBrushDrag.mode === "end") {
+            updateSelection(chartState.selectedStartMs, nextPointerMs, CUSTOM_PRESET_KEY);
+          } else {
+            const nextStart = nextPointerMs - activeBrushDrag.pointerOffsetMs;
+            updateSelection(
+              nextStart,
+              nextStart + activeBrushDrag.selectionSpanMs,
+              CUSTOM_PRESET_KEY
+            );
+          }
+
+          latestHistory = filterHistoryBySelection(overviewHistory);
+          syncControls();
+          renderHistory(displayedHistory());
+        };
+
+        const onPointerUp = () => {
+          selectionElement.classList.remove("dragging");
+          window.removeEventListener("pointermove", onPointerMove);
+          window.removeEventListener("pointerup", onPointerUp);
+          activeBrushDrag = null;
+          void fetchDetailHistory();
+        };
+
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp);
       }
 
       function bindControls() {
-        const slider = document.getElementById("history-window-slider");
-        slider.addEventListener("input", (event) => {
-          chartState.windowIndex = Number(event.target.value);
-          syncControls();
+        document.getElementById("history-presets").addEventListener("click", (event) => {
+          const target = event.target.closest("[data-preset-key]");
+          if (!target) {
+            return;
+          }
+          applyPresetWindow(target.dataset.presetKey, true);
         });
-        slider.addEventListener("change", requestHistoryRefresh);
+
         document.getElementById("peak-clip-toggle").addEventListener("click", () => {
           chartState.peakClipEnabled = !chartState.peakClipEnabled;
           syncControls();
-          renderHistory(latestHistory);
+          renderHistory(displayedHistory());
         });
+
+        const brushStage = document.getElementById("history-brush-stage");
+        const brushSelection = document.getElementById("history-brush-selection");
+        brushStage.addEventListener("pointerdown", (event) => {
+          const handle = event.target.closest("[data-handle]");
+          if (handle) {
+            event.preventDefault();
+            beginBrushDrag(handle.dataset.handle, event);
+            return;
+          }
+
+          if (brushSelection.contains(event.target)) {
+            event.preventDefault();
+            beginBrushDrag("move", event);
+            return;
+          }
+
+          const pointerMs = xToHistoryMs(event.clientX);
+          if (pointerMs == null) {
+            return;
+          }
+          const currentSpan = Math.max(selectionDurationMs(), MIN_SELECTION_MS);
+          updateSelection(
+            pointerMs - (currentSpan / 2),
+            pointerMs + (currentSpan / 2),
+            CUSTOM_PRESET_KEY
+          );
+          latestHistory = filterHistoryBySelection(overviewHistory);
+          syncControls();
+          renderHistory(displayedHistory());
+          void fetchDetailHistory();
+        });
+
         syncControls();
       }
 
       async function refresh() {
+        let node;
         try {
-          const historyParams = new URLSearchParams({
-            window_hours: String(currentWindowHours()),
-            max_points: String(HISTORY_MAX_POINTS),
-          });
-          const [node, history] = await Promise.all([
-            fetchJson(`/api/nodes/${encodeURIComponent(NODE_ID)}`),
-            fetchJson(`/api/nodes/${encodeURIComponent(NODE_ID)}/history?${historyParams.toString()}`),
-          ]);
-          latestNode = node;
-          latestHistory = history;
-          rerenderNode();
+          node = await fetchJson(`/api/nodes/${encodeURIComponent(NODE_ID)}`);
         } catch (error) {
           document.getElementById("title").textContent = t("common.node_unavailable");
           document.getElementById("meta").textContent = error.message;
-        } finally {
           scheduleRefresh();
+          return;
         }
+
+        latestNode = node;
+
+        try {
+          const overviewParams = new URLSearchParams({
+            window_hours: String(RETENTION_WINDOW_HOURS),
+            max_points: String(OVERVIEW_HISTORY_MAX_POINTS)
+          });
+          overviewHistory = normalizeHistory(
+            await fetchJson(`/api/nodes/${encodeURIComponent(NODE_ID)}/history?${overviewParams.toString()}`)
+          );
+        } catch (error) {
+          console.warn("failed to refresh overview history", error);
+          overviewHistory = [];
+          latestHistory = [];
+        }
+
+        ensureSelectionState();
+        rerenderNode();
+        await fetchDetailHistory();
+        scheduleRefresh();
       }
 
       async function init() {

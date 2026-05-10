@@ -126,8 +126,44 @@ impl HistoryStore {
         tokio::task::spawn_blocking(move || {
             query_history(db_path.as_ref(), &node_id, since, clamped_max_points)
         })
-            .await
-            .context("history query task failed")?
+        .await
+        .context("history query task failed")?
+    }
+
+    pub async fn query_history_range(
+        &self,
+        node_id: &str,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        max_points: usize,
+    ) -> Result<Vec<HistoryPoint>> {
+        if !self.is_available() {
+            return Ok(Vec::new());
+        }
+
+        let now = Utc::now();
+        let retention_floor = now - chrono::Duration::hours(DEFAULT_HISTORY_RETENTION_HOURS as i64);
+        let clamped_start = start.max(retention_floor);
+        let clamped_end = end.min(now);
+        if clamped_end <= clamped_start {
+            return Ok(Vec::new());
+        }
+
+        let db_path = Arc::clone(&self.db_path);
+        let node_id = node_id.to_string();
+        let clamped_max_points = max_points.max(60);
+
+        tokio::task::spawn_blocking(move || {
+            query_history_between(
+                db_path.as_ref(),
+                &node_id,
+                clamped_start,
+                clamped_end,
+                clamped_max_points,
+            )
+        })
+        .await
+        .context("history range query task failed")?
     }
 
     async fn maybe_schedule_prune(&self) -> Option<DateTime<Utc>> {
@@ -228,6 +264,16 @@ fn query_history(
     since: DateTime<Utc>,
     max_points: usize,
 ) -> Result<Vec<HistoryPoint>> {
+    query_history_between(db_path, node_id, since, Utc::now(), max_points)
+}
+
+fn query_history_between(
+    db_path: &PathBuf,
+    node_id: &str,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+    max_points: usize,
+) -> Result<Vec<HistoryPoint>> {
     let connection = open_database_connection(db_path, false)?;
     let mut statement = connection.prepare(
         r#"
@@ -241,26 +287,29 @@ fn query_history(
             latency_ms,
             disk_used_percent
         FROM history_points
-        WHERE node_id = ?1 AND recorded_at >= ?2
+        WHERE node_id = ?1 AND recorded_at >= ?2 AND recorded_at <= ?3
         ORDER BY recorded_at ASC
         "#,
     )?;
-    let rows = statement.query_map(params![node_id, since.timestamp()], |row| {
-        let recorded_at = row.get::<_, i64>(1)?;
-        Ok(HistoryPoint {
-            node_id: row.get(0)?,
-            recorded_at: Utc
-                .timestamp_opt(recorded_at, 0)
-                .single()
-                .unwrap_or_else(Utc::now),
-            cpu_usage_percent: row.get(2)?,
-            memory_used_percent: row.get(3)?,
-            rx_bytes_per_sec: row.get(4)?,
-            tx_bytes_per_sec: row.get(5)?,
-            latency_ms: row.get(6)?,
-            disk_used_percent: row.get(7)?,
-        })
-    })?;
+    let rows = statement.query_map(
+        params![node_id, since.timestamp(), until.timestamp()],
+        |row| {
+            let recorded_at = row.get::<_, i64>(1)?;
+            Ok(HistoryPoint {
+                node_id: row.get(0)?,
+                recorded_at: Utc
+                    .timestamp_opt(recorded_at, 0)
+                    .single()
+                    .unwrap_or_else(Utc::now),
+                cpu_usage_percent: row.get(2)?,
+                memory_used_percent: row.get(3)?,
+                rx_bytes_per_sec: row.get(4)?,
+                tx_bytes_per_sec: row.get(5)?,
+                latency_ms: row.get(6)?,
+                disk_used_percent: row.get(7)?,
+            })
+        },
+    )?;
 
     let mut points = Vec::new();
     for row in rows {

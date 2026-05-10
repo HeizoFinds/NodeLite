@@ -22,6 +22,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use base64::Engine;
+use chrono::{TimeZone, Utc};
 use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -158,6 +159,8 @@ const MAX_HISTORY_MAX_POINTS: usize = 1440;
 struct HistoryQuery {
     window_hours: Option<u64>,
     max_points: Option<usize>,
+    start: Option<i64>,
+    end: Option<i64>,
 }
 
 impl From<anyhow::Error> for ProtocolError {
@@ -614,17 +617,46 @@ async fn node_history(
     AxumPath(node_id): AxumPath<String>,
     Query(query): Query<HistoryQuery>,
 ) -> Response {
-    let window_hours = query.window_hours.unwrap_or(DEFAULT_HISTORY_WINDOW_HOURS);
     let max_points = query
         .max_points
         .unwrap_or(DEFAULT_HISTORY_MAX_POINTS)
         .clamp(60, MAX_HISTORY_MAX_POINTS);
 
-    match state
-        .history
-        .query_history(&node_id, window_hours, max_points)
-        .await
-    {
+    let history_result = match (query.start, query.end) {
+        (Some(start), Some(end)) => {
+            let Some(start_at) = Utc.timestamp_opt(start, 0).single() else {
+                return (StatusCode::BAD_REQUEST, "invalid history start timestamp")
+                    .into_response();
+            };
+            let Some(end_at) = Utc.timestamp_opt(end, 0).single() else {
+                return (StatusCode::BAD_REQUEST, "invalid history end timestamp").into_response();
+            };
+            if end_at <= start_at {
+                return (StatusCode::BAD_REQUEST, "history end must be after start")
+                    .into_response();
+            }
+            state
+                .history
+                .query_history_range(&node_id, start_at, end_at, max_points)
+                .await
+        }
+        (None, None) => {
+            let window_hours = query.window_hours.unwrap_or(DEFAULT_HISTORY_WINDOW_HOURS);
+            state
+                .history
+                .query_history(&node_id, window_hours, max_points)
+                .await
+        }
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "history start and end must be provided together",
+            )
+                .into_response();
+        }
+    };
+
+    match history_result {
         Ok(points) => Json(points).into_response(),
         Err(error) => {
             error!(node_id = %node_id, error = ?error, "failed to query node history");
