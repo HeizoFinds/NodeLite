@@ -675,7 +675,7 @@ fn authorize_identity(
 ) -> Result<NodeIdentity> {
     if let Some(entry) = entries.get(identity.node_id.as_str()) {
         if !constant_time_eq(token, &entry.token) {
-            bail!("invalid token for enrolled node {}", entry.node_id);
+            bail!("unauthorized");
         }
 
         let mut identity = identity.clone();
@@ -685,7 +685,7 @@ fn authorize_identity(
         return Ok(identity);
     }
 
-    bail!("node {} is not enrolled", identity.node_id);
+    bail!("unauthorized");
 }
 
 fn is_token_current(entries: &HashMap<String, RegisteredNode>, node_id: &str, token: &str) -> bool {
@@ -1047,7 +1047,58 @@ mod tests {
                 .authorize(&identity, "some-token")
                 .await
                 .expect_err("unenrolled node should be rejected");
-            assert!(error.to_string().contains("not enrolled"));
+            assert_eq!(error.to_string(), "unauthorized");
+
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn wrong_tokens_use_the_same_auth_error() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir =
+                std::env::temp_dir().join(format!("ximonitor-registry-auth-error-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let path = temp_dir.join("server.json");
+            let file = RegistryFile {
+                nodes: vec![RegisteredNode {
+                    node_id: "osaka-01".to_string(),
+                    node_label: "Osaka 01".to_string(),
+                    token: "secret".to_string(),
+                    tags: vec![],
+                    created_at: Utc::now(),
+                }],
+                install_sessions: Vec::new(),
+            };
+            std::fs::write(&path, serde_json::to_string_pretty(&file).expect("json"))
+                .expect("registry should be written");
+            let registry = NodeRegistry::load(&path)
+                .await
+                .expect("registry should load");
+            let identity = NodeIdentity {
+                node_id: "osaka-01".to_string(),
+                node_label: "Osaka 01".to_string(),
+                hostname: "osaka-01.internal".to_string(),
+                os: "Ubuntu".to_string(),
+                kernel_version: None,
+                cpu_model: None,
+                cpu_cores: 2,
+                agent_version: "0.1.0".to_string(),
+                boot_time: None,
+                tags: Vec::new(),
+            };
+
+            let error = registry
+                .authorize(&identity, "wrong-secret")
+                .await
+                .expect_err("wrong token should be rejected");
+            assert_eq!(error.to_string(), "unauthorized");
 
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_dir(&temp_dir);

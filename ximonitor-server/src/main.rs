@@ -876,8 +876,14 @@ async fn handle_socket(
     {
         Ok(identity) => identity,
         Err(error) => {
+            warn!(
+                client_ip = %client_ip,
+                requested_node_id = %hello.identity.node_id,
+                error = ?error,
+                "websocket authentication rejected",
+            );
             state.ws_admission.record_auth_failure(client_ip);
-            return Err(ProtocolError::Client(error.to_string()));
+            return Err(ProtocolError::Client("unauthorized".to_string()));
         }
     };
     state.ws_admission.clear_auth_failures(client_ip);
