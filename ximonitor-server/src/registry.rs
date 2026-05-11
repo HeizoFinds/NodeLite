@@ -479,6 +479,9 @@ fn save_registry_file_sync(path: &Path, file: &RegistryFile) -> Result<()> {
         .with_context(|| format!("failed to write {}", tmp_path.display()))?;
     std::fs::rename(&tmp_path, path)
         .with_context(|| format!("failed to replace {}", path.display()))?;
+    // rename 之后再 fsync 父目录,保证目录项变更也落盘,与 write_registry_payload 内部的
+    // fsync 配合,使 crash 后要么看到旧文件、要么看到完整新文件,不会出现空文件。
+    sync_parent_dir(path);
     harden_registry_permissions(path)
         .with_context(|| format!("failed to set permissions on {}", path.display()))?;
     Ok(())
@@ -525,7 +528,23 @@ fn write_registry_payload(path: &Path, payload: &str) -> Result<()> {
         .with_context(|| format!("failed to open {}", path.display()))?;
     file.write_all(payload.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
+    // rename 前确保数据已经刷盘,避免主机崩溃后留下空的注册表文件 —— 注册表丢失
+    // 等于所有 Agent 鉴权失败,后果比一次写入失败更严重。
+    file.sync_all()
+        .with_context(|| format!("failed to fsync {}", path.display()))?;
     Ok(())
+}
+
+/// rename 之后 fsync 父目录,使新目录项随之持久化。
+/// 打不开父目录(权限等)时静默退出 —— 数据已经 fsync,目录项丢失只意味着回退到上一份注册表。
+fn sync_parent_dir(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if parent.as_os_str().is_empty() {
+        return;
+    }
+    let _ = std::fs::File::open(parent).and_then(|dir| dir.sync_all());
 }
 
 fn registry_lock_path(path: &Path) -> PathBuf {

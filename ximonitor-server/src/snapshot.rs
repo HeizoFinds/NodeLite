@@ -67,6 +67,8 @@ async fn persist_snapshot(path: &Path, statuses: &[NodeStatus]) -> Result<()> {
     fs::rename(&temporary_path, path)
         .await
         .with_context(|| format!("failed to move snapshot into place at {}", path.display()))?;
+    // 把 rename 这一步也持久化到父目录,否则主机宕机后可能看到旧目录项指向新 inode 的空文件。
+    sync_parent_dir(path).await;
     harden_snapshot_permissions(path)?;
     Ok(())
 }
@@ -91,8 +93,29 @@ fn write_snapshot_payload(path: &Path, payload: &[u8]) -> Result<()> {
     use std::io::Write;
     file.write_all(payload)
         .with_context(|| format!("failed to write {}", path.display()))?;
+    // 在 rename 之前显式 fsync,使写入真正落到磁盘;否则主机宕机后 rename
+    // 完成但临时文件内容仍在页缓存,目标路径会出现零字节或半截文件。
+    file.sync_all()
+        .with_context(|| format!("failed to fsync {}", path.display()))?;
     harden_snapshot_permissions(path)?;
     Ok(())
+}
+
+/// 在 rename 之后异步 fsync 父目录,确保新目录项也被持久化。
+/// 父目录无法打开(例如权限受限)时静默忽略 —— 数据本身已经 fsync,目录项的丢失只会回退到上一次快照。
+async fn sync_parent_dir(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if parent.as_os_str().is_empty() {
+        return;
+    }
+    let parent = parent.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || {
+        let dir = std::fs::File::open(&parent)?;
+        dir.sync_all()
+    })
+    .await;
 }
 
 /// 强制把目标文件的权限调整为 0600(仅文件属主可读写)。
