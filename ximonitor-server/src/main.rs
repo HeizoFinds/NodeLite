@@ -1203,10 +1203,10 @@ mod tests {
 
     use super::{
         AppState, MAX_SANITIZED_LOAD, MAX_SANITIZED_RATE_BYTES_PER_SEC, ReadonlyRouteAuth,
-        WsAdmissionController, WsAdmissionError, bootstrap, healthz, index,
-        install_agent_script, install_bootstrap, node_detail, node_history, node_status, nodes,
-        overview, resolve_client_ip, sanitize_snapshot, ui_i18n_asset,
-        uses_insecure_remote_public_base_url, ws_handler,
+        WsAdmissionController, WsAdmissionError, bootstrap, healthz, index, install_agent_script,
+        install_bootstrap, node_detail, node_history, node_status, nodes, overview,
+        resolve_client_ip, sanitize_snapshot, ui_i18n_asset, uses_insecure_remote_public_base_url,
+        ws_handler,
     };
     use crate::history::HistoryStore;
     use crate::registry::NodeRegistry;

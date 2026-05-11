@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -115,27 +116,26 @@ impl NodeRegistry {
     pub async fn consume_install_token(&self, token: &str) -> Result<Option<RegisteredNode>> {
         validate_non_empty("install token", token)?;
 
-        let mut file = load_registry_file(self.path.as_path()).await?;
-        let pruned = prune_expired_install_sessions(&mut file, Utc::now());
-        let Some(index) = file
-            .install_sessions
-            .iter()
-            .position(|session| session.token == token)
-        else {
-            if pruned {
-                save_registry_file(self.path.as_path(), &file).await?;
-                self.replace_state_from_file(file).await?;
-            }
-            return Ok(None);
-        };
+        let token = token.to_string();
+        let (node, file) = mutate_registry_file(self.path.as_path(), move |file| {
+            let pruned = prune_expired_install_sessions(file, Utc::now());
+            let Some(index) = file
+                .install_sessions
+                .iter()
+                .position(|session| constant_time_eq(&session.token, &token))
+            else {
+                return Ok((None, pruned));
+            };
 
-        let session = file.install_sessions.remove(index);
-        let node = file
-            .nodes
-            .iter()
-            .find(|node| node.node_id == session.node_id)
-            .cloned();
-        save_registry_file(self.path.as_path(), &file).await?;
+            let session = file.install_sessions.remove(index);
+            let node = file
+                .nodes
+                .iter()
+                .find(|node| node.node_id == session.node_id)
+                .cloned();
+            Ok((node, true))
+        })
+        .await?;
         self.replace_state_from_file(file).await?;
         Ok(node)
     }
@@ -158,68 +158,76 @@ pub async fn issue_node(path: &Path, request: IssueNodeRequest) -> Result<IssueN
         validate_non_empty("node_label", node_label)?;
     }
 
-    let mut file = load_registry_file(path).await?;
-    let now = Utc::now();
-    prune_expired_install_sessions(&mut file, now);
-    let mut rotated_token = false;
+    let request = request.clone();
+    let (result, _) = mutate_registry_file(path, move |file| {
+        let now = Utc::now();
+        prune_expired_install_sessions(file, now);
+        let mut rotated_token = false;
 
-    if let Some(index) = file
-        .nodes
-        .iter()
-        .position(|node| node.node_id == request.node_id)
-    {
-        if let Some(node_label) = request.node_label.as_ref() {
-            file.nodes[index].node_label = node_label.trim().to_string();
+        if let Some(index) = file
+            .nodes
+            .iter()
+            .position(|node| node.node_id == request.node_id)
+        {
+            if let Some(node_label) = request.node_label.as_ref() {
+                file.nodes[index].node_label = node_label.trim().to_string();
+            }
+            if !request.tags.is_empty() {
+                file.nodes[index].tags = normalize_string_list(request.tags.clone());
+            }
+            if request.rotate_token {
+                file.nodes[index].token = generate_token()?;
+                rotated_token = true;
+            }
+
+            validate_registered_node(&file.nodes[index])?;
+            let node = file.nodes[index].clone();
+            let install_session = mint_install_session(file, &node.node_id, now)?;
+            return Ok((
+                IssueNodeResult {
+                    node,
+                    created: false,
+                    rotated_token,
+                    install_token: install_session.token,
+                    install_token_expires_at: install_session.expires_at,
+                },
+                true,
+            ));
         }
-        if !request.tags.is_empty() {
-            file.nodes[index].tags = normalize_string_list(request.tags);
-        }
-        if request.rotate_token {
-            file.nodes[index].token = generate_token()?;
-            rotated_token = true;
-        }
 
-        validate_registered_node(&file.nodes[index])?;
-        let node = file.nodes[index].clone();
-        let install_session = mint_install_session(&mut file, &node.node_id, now)?;
-        save_registry_file(path, &file).await?;
-        return Ok(IssueNodeResult {
-            node,
-            created: false,
-            rotated_token,
-            install_token: install_session.token,
-            install_token_expires_at: install_session.expires_at,
-        });
-    }
+        let node = RegisteredNode {
+            node_id: request.node_id.trim().to_string(),
+            node_label: request
+                .node_label
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(request.node_id.as_str())
+                .to_string(),
+            token: generate_token()?,
+            tags: normalize_string_list(request.tags.clone()),
+            created_at: now,
+        };
+        validate_registered_node(&node)?;
 
-    let node = RegisteredNode {
-        node_id: request.node_id.trim().to_string(),
-        node_label: request
-            .node_label
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(request.node_id.as_str())
-            .to_string(),
-        token: generate_token()?,
-        tags: normalize_string_list(request.tags),
-        created_at: now,
-    };
-    validate_registered_node(&node)?;
-
-    file.nodes.push(node.clone());
-    file.nodes
-        .sort_by(|left, right| left.node_id.cmp(&right.node_id));
-    let install_session = mint_install_session(&mut file, &node.node_id, now)?;
-    save_registry_file(path, &file).await?;
-
-    Ok(IssueNodeResult {
-        node,
-        created: true,
-        rotated_token,
-        install_token: install_session.token,
-        install_token_expires_at: install_session.expires_at,
+        file.nodes.push(node.clone());
+        file.nodes
+            .sort_by(|left, right| left.node_id.cmp(&right.node_id));
+        let install_session = mint_install_session(file, &node.node_id, now)?;
+        Ok((
+            IssueNodeResult {
+                node,
+                created: true,
+                rotated_token,
+                install_token: install_session.token,
+                install_token_expires_at: install_session.expires_at,
+            },
+            true,
+        ))
     })
+    .await?;
+
+    Ok(result)
 }
 
 pub fn build_agent_server_url(public_base_url: &str) -> Result<String> {
@@ -368,6 +376,24 @@ async fn load_registry_file(path: &Path) -> Result<RegistryFile> {
     Ok(file)
 }
 
+fn load_registry_file_sync(path: &Path) -> Result<RegistryFile> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RegistryFile::default());
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read node registry {}", path.display()));
+        }
+    };
+
+    let file: RegistryFile = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse node registry {}", path.display()))?;
+    validate_registry_file(path, &file)?;
+    Ok(file)
+}
+
 async fn load_registry_state(path: &Path) -> Result<RegistryState> {
     let mut file = load_registry_file(path).await?;
     prune_expired_install_sessions(&mut file, Utc::now());
@@ -397,14 +423,13 @@ fn registry_state_from_file(path: &Path, file: RegistryFile) -> Result<RegistryS
     })
 }
 
-async fn save_registry_file(path: &Path, file: &RegistryFile) -> Result<()> {
+fn save_registry_file_sync(path: &Path, file: &RegistryFile) -> Result<()> {
     validate_registry_file(path, file)?;
 
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)
-            .await
+        std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
@@ -413,12 +438,30 @@ async fn save_registry_file(path: &Path, file: &RegistryFile) -> Result<()> {
     let tmp_path = temporary_registry_path(path);
     write_registry_payload(&tmp_path, &payload)
         .with_context(|| format!("failed to write {}", tmp_path.display()))?;
-    fs::rename(&tmp_path, path)
-        .await
+    std::fs::rename(&tmp_path, path)
         .with_context(|| format!("failed to replace {}", path.display()))?;
     harden_registry_permissions(path)
         .with_context(|| format!("failed to set permissions on {}", path.display()))?;
     Ok(())
+}
+
+async fn mutate_registry_file<T, F>(path: &Path, operation: F) -> Result<(T, RegistryFile)>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut RegistryFile) -> Result<(T, bool)> + Send + 'static,
+{
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let _lock = acquire_registry_lock(&path)?;
+        let mut file = load_registry_file_sync(&path)?;
+        let (value, should_persist) = operation(&mut file)?;
+        if should_persist {
+            save_registry_file_sync(&path, &file)?;
+        }
+        Ok((value, file))
+    })
+    .await
+    .context("registry mutation task failed")?
 }
 
 fn temporary_registry_path(path: &Path) -> PathBuf {
@@ -441,6 +484,66 @@ fn write_registry_payload(path: &Path, payload: &str) -> Result<()> {
     file.write_all(payload.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
+}
+
+fn registry_lock_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("server.json");
+    path.with_file_name(format!("{file_name}.lock"))
+}
+
+fn acquire_registry_lock(path: &Path) -> Result<RegistryFileLock> {
+    let lock_path = registry_lock_path(path);
+    if let Some(parent) = lock_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    let file = options
+        .open(&lock_path)
+        .with_context(|| format!("failed to open {}", lock_path.display()))?;
+    harden_registry_permissions(&lock_path)?;
+    lock_file_exclusive(&file)
+        .with_context(|| format!("failed to lock {}", lock_path.display()))?;
+    Ok(RegistryFileLock { file, lock_path })
+}
+
+fn lock_file_exclusive(file: &File) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error()).context("flock failed");
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+    }
+
+    Ok(())
+}
+
+fn unlock_file(file: &File) {
+    #[cfg(unix)]
+    {
+        let _ = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+    }
 }
 
 fn harden_registry_permissions(path: &Path) -> Result<()> {
@@ -529,7 +632,7 @@ fn authorize_identity(
     token: &str,
 ) -> Result<NodeIdentity> {
     if let Some(entry) = entries.get(identity.node_id.as_str()) {
-        if token != entry.token {
+        if !constant_time_eq(token, &entry.token) {
             bail!("invalid token for enrolled node {}", entry.node_id);
         }
 
@@ -545,10 +648,37 @@ fn authorize_identity(
 
 fn is_token_current(entries: &HashMap<String, RegisteredNode>, node_id: &str, token: &str) -> bool {
     if let Some(entry) = entries.get(node_id) {
-        return token == entry.token;
+        return constant_time_eq(token, &entry.token);
     }
 
     false
+}
+
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    let mut diff = left.len() ^ right.len();
+    let max_len = left.len().max(right.len());
+
+    for index in 0..max_len {
+        let left_byte = usize::from(*left.get(index).unwrap_or(&0));
+        let right_byte = usize::from(*right.get(index).unwrap_or(&0));
+        diff |= left_byte ^ right_byte;
+    }
+
+    diff == 0
+}
+
+struct RegistryFileLock {
+    file: File,
+    lock_path: PathBuf,
+}
+
+impl Drop for RegistryFileLock {
+    fn drop(&mut self) {
+        unlock_file(&self.file);
+        let _ = harden_registry_permissions(&self.lock_path);
+    }
 }
 
 fn validate_runtime_identity(identity: &NodeIdentity) -> Result<()> {
