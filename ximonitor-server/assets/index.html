@@ -742,10 +742,10 @@
       const MAP_WIDTH = 1200;
       const MAP_HEIGHT = 600;
       const MAP_MAX_LAT = 82;
-      const MAP_MAX_MERCATOR = Math.log(Math.tan(Math.PI / 4 + (MAP_MAX_LAT * Math.PI / 180) / 2));
+      const MAP_MIN_LAT = -58;
       const MAP_DOT_GAP = 4;
       const MAP_DOT_SIZE = 1.05;
-      const MAP_VERTICAL_SHIFT = 10;
+      const MAP_VERTICAL_SHIFT = 70;
       const WORLD_GEOJSON_URL = "https://raw.githubusercontent.com/datasets/geo-boundaries-world-110m/master/countries.geojson";
       let cachedWorldGeoJson = null;
       const WORLD_LAND_POLYGONS = [
@@ -979,13 +979,23 @@
         return getComputedStyle(document.documentElement).getPropertyValue("--map-land-dot").trim() || "rgba(148,163,184,0.58)";
       }
       function mapProject(lon, lat) {
-        const safeLat = Math.max(-85, Math.min(85, Number(lat)));
+        const safeLat = Math.max(-85, Math.min(MAP_MAX_LAT, Number(lat)));
         const latRad = safeLat * Math.PI / 180;
         const mercator = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
         return {
           x: (Number(lon) + 180) * (MAP_WIDTH / 360),
-          y: (MAP_HEIGHT / 2) - (mercator / MAP_MAX_MERCATOR) * (MAP_HEIGHT * 0.45) + MAP_VERTICAL_SHIFT,
+          y: (MAP_HEIGHT / 2) - (MAP_WIDTH * mercator / (2 * Math.PI)) + MAP_VERTICAL_SHIFT,
         };
+      }
+      function polygonMaxLat(polygon) {
+        let maxLat = -90;
+        for (const ring of polygon || []) {
+          for (const coord of ring || []) {
+            const lat = Number(coord[1]);
+            if (Number.isFinite(lat)) maxLat = Math.max(maxLat, lat);
+          }
+        }
+        return maxLat;
       }
       function drawProjectedRing(ctx, ring) {
         let started = false;
@@ -1009,9 +1019,11 @@
         for (const feature of geoJson.features || []) {
           const geometry = feature.geometry || {};
           if (geometry.type === "Polygon") {
+            if (polygonMaxLat(geometry.coordinates) < MAP_MIN_LAT) continue;
             for (const ring of geometry.coordinates || []) drawProjectedRing(ctx, ring);
           } else if (geometry.type === "MultiPolygon") {
             for (const polygon of geometry.coordinates || []) {
+              if (polygonMaxLat(polygon) < MAP_MIN_LAT) continue;
               for (const ring of polygon || []) drawProjectedRing(ctx, ring);
             }
           }
