@@ -710,6 +710,7 @@
       let currentLanguage = "en";
       let latestOverview = null;
       let latestNodes = [];
+      let refreshTimer = null;
       const sparkHistory = new Map();
 
       // 国家区域 -> 大致(经度归一,纬度归一)中心。用于把节点 hint 到地图上。
@@ -1314,6 +1315,11 @@
         return r.json();
       }
       async function refresh() {
+        if (document.hidden) {
+          if (refreshTimer != null) window.clearTimeout(refreshTimer);
+          refreshTimer = window.setTimeout(refresh, REFRESH_MS);
+          return;
+        }
         try {
           const [overview, nodes] = await Promise.all([
             fetchJson("/api/overview"),
@@ -1330,7 +1336,8 @@
         } catch (error) {
           document.getElementById("nodes").innerHTML = `<div class="empty">${escapeHtml(t("index.dashboard_load_failed", { error: error.message }))}</div>`;
         } finally {
-          window.setTimeout(refresh, REFRESH_MS);
+          if (refreshTimer != null) window.clearTimeout(refreshTimer);
+          refreshTimer = window.setTimeout(refresh, REFRESH_MS);
         }
       }
 
@@ -1346,6 +1353,11 @@
         });
         applyChrome();
         renderWorldDotMap();
+        document.addEventListener("visibilitychange", () => {
+          if (document.hidden) return;
+          if (refreshTimer != null) { window.clearTimeout(refreshTimer); refreshTimer = null; }
+          refresh();
+        });
         refresh();
         window.setInterval(() => { if (latestOverview) renderUpdated(latestOverview); }, 30000);
       }

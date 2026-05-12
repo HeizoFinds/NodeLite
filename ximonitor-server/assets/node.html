@@ -1973,6 +1973,7 @@
         refreshTimer = window.setTimeout(refresh, REFRESH_MS);
       }
       async function refresh() {
+        if (document.hidden) { scheduleRefresh(); return; }
         let node;
         try {
           node = await fetchJson(`/api/nodes/${encodeURIComponent(NODE_ID)}`);
@@ -2005,6 +2006,11 @@
         bindControls();
         setActiveTab(loadStoredTab() || "overview", { persist: false });
         rerenderNode();
+        document.addEventListener("visibilitychange", () => {
+          if (document.hidden) return;
+          if (refreshTimer != null) { window.clearTimeout(refreshTimer); refreshTimer = null; }
+          refresh();
+        });
         refresh();
       }
       init();
