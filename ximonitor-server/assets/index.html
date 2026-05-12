@@ -320,17 +320,12 @@
           linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
         background-size: 5% 10%;
       }
-      .map-svg {
+      .map-canvas {
         position: absolute;
         inset: 0;
         width: 100%;
         height: 100%;
         filter: drop-shadow(0 18px 36px rgba(0,0,0,0.20));
-      }
-      .map-land-dot {
-        fill: var(--map-land-dot);
-        stroke: var(--map-land-stroke);
-        stroke-width: 0.18;
       }
       .map-dot {
         position: absolute;
@@ -621,9 +616,7 @@
             </div>
             <div class="map-stage">
               <div class="map-grid"></div>
-              <svg class="map-svg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-                <g id="map-land-dots"></g>
-              </svg>
+              <canvas id="map-canvas" class="map-canvas" width="1200" height="600" aria-hidden="true"></canvas>
               <div id="map-dots"></div>
             </div>
           </article>
@@ -746,10 +739,15 @@
         usa: "🇺🇸", ca: "🇨🇦", br: "🇧🇷", ar: "🇦🇷", mx: "🇲🇽", za: "🇿🇦",
         ng: "🇳🇬", eg: "🇪🇬",
       };
-      const MAP_WIDTH = 1000;
-      const MAP_HEIGHT = 500;
+      const MAP_WIDTH = 1200;
+      const MAP_HEIGHT = 600;
       const MAP_MAX_LAT = 82;
       const MAP_MAX_MERCATOR = Math.log(Math.tan(Math.PI / 4 + (MAP_MAX_LAT * Math.PI / 180) / 2));
+      const MAP_DOT_GAP = 4;
+      const MAP_DOT_SIZE = 1.05;
+      const MAP_VERTICAL_SHIFT = 10;
+      const WORLD_GEOJSON_URL = "https://raw.githubusercontent.com/datasets/geo-boundaries-world-110m/master/countries.geojson";
+      let cachedWorldGeoJson = null;
       const WORLD_LAND_POLYGONS = [
         [[-168,72],[-150,69],[-137,60],[-127,55],[-124,49],[-129,43],[-124,33],[-116,29],[-108,23],[-97,18],[-90,19],[-82,25],[-80,31],[-75,38],[-67,45],[-55,48],[-51,55],[-64,64],[-82,70],[-110,73],[-138,73]],
         [[-169,63],[-154,59],[-143,59],[-139,55],[-151,53],[-164,56]],
@@ -864,6 +862,7 @@
         button.addEventListener("click", () => {
           const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
           applyTheme(next);
+          void renderWorldDotMap();
         });
       }
       function fmtBytes(bytes) {
@@ -976,38 +975,93 @@
         return { bg: "rgba(239,68,68,0.20)", fg: "#f87171" };
       }
 
-      function mapInvertMercator(x, y) {
-        const lon = (x / MAP_WIDTH) * 360 - 180;
-        const mercator = ((MAP_HEIGHT / 2) - y) / (MAP_HEIGHT * 0.46) * MAP_MAX_MERCATOR;
-        const lat = (2 * Math.atan(Math.exp(mercator)) - Math.PI / 2) * 180 / Math.PI;
-        return [lon, lat];
+      function mapDotColor() {
+        return getComputedStyle(document.documentElement).getPropertyValue("--map-land-dot").trim() || "rgba(148,163,184,0.58)";
       }
-      function pointInPolygon(lon, lat, polygon) {
-        let inside = false;
-        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-          const [xi, yi] = polygon[i];
-          const [xj, yj] = polygon[j];
-          const intersects = ((yi > lat) !== (yj > lat)) && (lon < ((xj - xi) * (lat - yi)) / ((yj - yi) || Number.EPSILON) + xi);
-          if (intersects) inside = !inside;
+      function mapProject(lon, lat) {
+        const safeLat = Math.max(-85, Math.min(85, Number(lat)));
+        const latRad = safeLat * Math.PI / 180;
+        const mercator = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
+        return {
+          x: (Number(lon) + 180) * (MAP_WIDTH / 360),
+          y: (MAP_HEIGHT / 2) - (mercator / MAP_MAX_MERCATOR) * (MAP_HEIGHT * 0.45) + MAP_VERTICAL_SHIFT,
+        };
+      }
+      function drawProjectedRing(ctx, ring) {
+        let started = false;
+        let lastLon = null;
+        for (const coord of ring) {
+          const lon = Number(coord[0]);
+          const lat = Number(coord[1]);
+          if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+          const point = mapProject(lon, lat);
+          if (!started || (lastLon != null && Math.abs(lon - lastLon) > 180)) {
+            ctx.moveTo(point.x, point.y);
+            started = true;
+          } else {
+            ctx.lineTo(point.x, point.y);
+          }
+          lastLon = lon;
         }
-        return inside;
       }
-      function isWorldLand(lon, lat) {
-        return WORLD_LAND_POLYGONS.some((polygon) => pointInPolygon(lon, lat, polygon));
-      }
-      function renderWorldDotMap() {
-        const root = document.getElementById("map-land-dots");
-        if (!root) return;
-        const spacing = 7;
-        const dots = [];
-        for (let y = 38; y <= MAP_HEIGHT - 34; y += spacing) {
-          for (let x = 42; x <= MAP_WIDTH - 42; x += spacing) {
-            const [lon, lat] = mapInvertMercator(x, y);
-            if (!isWorldLand(lon, lat)) continue;
-            dots.push(`<circle class="map-land-dot" cx="${x}" cy="${y}" r="0.88" />`);
+      function drawGeoJsonMask(ctx, geoJson) {
+        ctx.beginPath();
+        for (const feature of geoJson.features || []) {
+          const geometry = feature.geometry || {};
+          if (geometry.type === "Polygon") {
+            for (const ring of geometry.coordinates || []) drawProjectedRing(ctx, ring);
+          } else if (geometry.type === "MultiPolygon") {
+            for (const polygon of geometry.coordinates || []) {
+              for (const ring of polygon || []) drawProjectedRing(ctx, ring);
+            }
           }
         }
-        root.innerHTML = dots.join("");
+        ctx.fill("evenodd");
+      }
+      function drawFallbackMask(ctx) {
+        ctx.beginPath();
+        for (const polygon of WORLD_LAND_POLYGONS) drawProjectedRing(ctx, polygon);
+        ctx.fill("evenodd");
+      }
+      async function loadWorldGeoJson() {
+        if (cachedWorldGeoJson) return cachedWorldGeoJson;
+        const response = await fetch(WORLD_GEOJSON_URL, { cache: "force-cache", headers: { accept: "application/geo+json,application/json" } });
+        if (!response.ok) throw new Error(`${WORLD_GEOJSON_URL} -> ${response.status}`);
+        cachedWorldGeoJson = await response.json();
+        return cachedWorldGeoJson;
+      }
+      async function renderWorldDotMap() {
+        const canvas = document.getElementById("map-canvas");
+        const ctx = canvas?.getContext("2d");
+        if (!canvas || !ctx) return;
+        canvas.width = MAP_WIDTH;
+        canvas.height = MAP_HEIGHT;
+        const maskCanvas = document.createElement("canvas");
+        maskCanvas.width = MAP_WIDTH;
+        maskCanvas.height = MAP_HEIGHT;
+        const mask = maskCanvas.getContext("2d", { willReadFrequently: true });
+        if (!mask) return;
+        mask.clearRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+        mask.fillStyle = "#fff";
+        try {
+          drawGeoJsonMask(mask, await loadWorldGeoJson());
+        } catch (error) {
+          console.warn("failed to load high precision map; using built-in fallback", error);
+          drawFallbackMask(mask);
+        }
+        const pixels = mask.getImageData(0, 0, MAP_WIDTH, MAP_HEIGHT).data;
+        ctx.clearRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+        ctx.fillStyle = mapDotColor();
+        ctx.beginPath();
+        for (let y = 0; y < MAP_HEIGHT; y += MAP_DOT_GAP) {
+          for (let x = 0; x < MAP_WIDTH; x += MAP_DOT_GAP) {
+            const index = ((y | 0) * MAP_WIDTH + (x | 0)) * 4;
+            if (pixels[index] === 0 && pixels[index + 3] === 0) continue;
+            ctx.moveTo(x + MAP_DOT_SIZE, y);
+            ctx.arc(x, y, MAP_DOT_SIZE, 0, Math.PI * 2);
+          }
+        }
+        ctx.fill();
       }
 
       function renderMapDots(nodes) {
