@@ -222,6 +222,10 @@ const DEFAULT_HISTORY_WINDOW_HOURS: u64 = 24;
 const DEFAULT_HISTORY_MAX_POINTS: usize = 480;
 /// 历史接口允许的最大样本点数。
 const MAX_HISTORY_MAX_POINTS: usize = 1440;
+/// WebSocket 认证失败表的软上限:超过该规模后,`record_auth_failure` 会顺手
+/// 做一次全表扫描,清理已过期且未封禁的 IP 条目。攻击者用大量伪造 IP 制造
+/// 一次性失败时,本表只在攻击侧累积代价,稳态体积可控。
+const WS_AUTH_FAILURE_TABLE_SOFT_LIMIT: usize = 1024;
 
 /// 历史查询接口的查询字符串参数。
 ///
@@ -358,6 +362,13 @@ impl WsAdmissionController {
             failure_state.blocked_until =
                 Some(now + Duration::from_secs(self.config.auth_block_secs));
             failure_state.recent_failures.clear();
+        }
+        // 攻击者可以用一波伪造 IP 把失败表撑大,而单 IP 后续不再回访就不会被
+        // `try_acquire` / `prune_auth_failure_state` 主动清理 —— 在长跑实例里
+        // 这是一条慢速内存泄漏。表过大时顺手做一次全表扫描,把已过期且未封禁
+        // 的条目删掉;代价 O(N) 但摊销到攻击侧,稳态查询路径仍然 O(1)。
+        if state.auth_failures.len() > WS_AUTH_FAILURE_TABLE_SOFT_LIMIT {
+            sweep_expired_auth_failures(&mut state.auth_failures, now, failure_window);
         }
     }
 
@@ -1231,6 +1242,20 @@ fn prune_auth_failure_state(state: &mut AuthFailureState, now: Instant, failure_
     }
 }
 
+/// 全表扫描:对每个 IP 的失败状态做一次 `prune_auth_failure_state`,然后丢弃
+/// 那些既无未过期失败、也无未到期封禁的条目。代价 O(N),由 `record_auth_failure`
+/// 在表大小超过软上限时触发,使被攻击场景下表的稳态体积可控。
+fn sweep_expired_auth_failures(
+    auth_failures: &mut HashMap<IpAddr, AuthFailureState>,
+    now: Instant,
+    failure_window: Duration,
+) {
+    auth_failures.retain(|_, failure_state| {
+        prune_auth_failure_state(failure_state, now, failure_window);
+        !failure_state.recent_failures.is_empty() || failure_state.blocked_until.is_some()
+    });
+}
+
 /// 把准入控制错误映射成对应的 HTTP 响应。
 fn ws_admission_error_response(error: WsAdmissionError) -> Response {
     match error {
@@ -1636,8 +1661,8 @@ mod tests {
         SanitizationReport, ServerReadiness, WsAdmissionController, WsAdmissionError, bootstrap,
         healthz, index, install_agent_script, install_bootstrap, next_metric_anomaly_count,
         node_detail, node_history, node_status, nodes, overview, readyz, resolve_client_ip,
-        sanitize_snapshot, should_disconnect_for_metric_anomalies, truncate_to_byte_boundary,
-        ui_i18n_asset, uses_insecure_remote_public_base_url, ws_handler,
+        sanitize_snapshot, should_disconnect_for_metric_anomalies, sweep_expired_auth_failures,
+        truncate_to_byte_boundary, ui_i18n_asset, uses_insecure_remote_public_base_url, ws_handler,
     };
     use crate::history::HistoryStore;
     use crate::registry::{IssueNodeRequest, NodeRegistry, issue_node};
@@ -2298,5 +2323,58 @@ mod tests {
             }
             _ => panic!("client should be temporarily blocked"),
         }
+    }
+
+    #[test]
+    fn sweep_drops_expired_failure_entries_and_keeps_live_blocks() {
+        // 验证 sweep:已过期且未封禁的条目被移除;仍封禁的条目保留;
+        // 仍在统计窗口内的失败条目保留。
+        use std::collections::{HashMap, VecDeque};
+        use std::time::{Duration, Instant};
+
+        use super::AuthFailureState;
+
+        let mut failures: HashMap<IpAddr, AuthFailureState> = HashMap::new();
+        let now = Instant::now();
+        let window = Duration::from_secs(60);
+
+        // 1. 过期 + 未封禁 → 应被 sweep 删除
+        let expired_ip: IpAddr = "203.0.113.10".parse().expect("ip");
+        let mut expired = AuthFailureState::default();
+        expired
+            .recent_failures
+            .push_back(now - Duration::from_secs(3600));
+        failures.insert(expired_ip, expired);
+
+        // 2. 已封禁但封禁未到期 → 应保留
+        let blocked_ip: IpAddr = "203.0.113.20".parse().expect("ip");
+        let blocked = AuthFailureState {
+            recent_failures: VecDeque::new(),
+            blocked_until: Some(now + Duration::from_secs(300)),
+        };
+        failures.insert(blocked_ip, blocked);
+
+        // 3. 窗口内的失败 → 应保留
+        let recent_ip: IpAddr = "203.0.113.30".parse().expect("ip");
+        let mut recent = AuthFailureState::default();
+        recent
+            .recent_failures
+            .push_back(now - Duration::from_secs(10));
+        failures.insert(recent_ip, recent);
+
+        sweep_expired_auth_failures(&mut failures, now, window);
+
+        assert!(
+            !failures.contains_key(&expired_ip),
+            "expired entry should be removed",
+        );
+        assert!(
+            failures.contains_key(&blocked_ip),
+            "active block should be preserved",
+        );
+        assert!(
+            failures.contains_key(&recent_ip),
+            "in-window failure should be preserved",
+        );
     }
 }
