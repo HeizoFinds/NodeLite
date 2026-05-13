@@ -62,8 +62,13 @@ pub struct ServerNoticeMessage {
 }
 
 /// Agent 请求刷新 Token(当 Token 即将过期时)。
+///
+/// `node_id` 字段由历史原因保留以兼容旧客户端,**服务端不再使用它**:刷新
+/// 的目标节点完全由 WebSocket 会话的认证身份决定。未来一个协议大版本
+/// 可以彻底移除该字段。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RefreshTokenRequestMessage {
+    #[serde(default)]
     pub node_id: String,
 }
 

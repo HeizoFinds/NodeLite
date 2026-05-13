@@ -1732,8 +1732,20 @@ async fn handle_socket(
                                 break Err(ProtocolError::Client("agent must not send server_notice messages".to_string()));
                             }
                             WireMessage::RefreshTokenRequest(request) => {
+                                // `request.node_id` 完全由客户端控制,我们不应该
+                                // 信任它来决定"为谁刷 token"。会话握手期间的认证
+                                // 已经把这条连接绑定到 `node_id`,接下来所有的
+                                // refresh 都只对它生效。字段保留是为了不破坏旧
+                                // Agent 的请求格式;如果客户端发了别的 node_id,
+                                // 那要么是 bug 要么是恶意,但都不会得到非本会话
+                                // 节点的 token。这里 silently ignore + debug 记录
+                                // 即可,而不再像以前那样直接断开连接。
                                 if request.node_id != node_id {
-                                    break Err(ProtocolError::Client("refresh token request node_id mismatch".to_string()));
+                                    warn!(
+                                        session_node_id = %node_id,
+                                        client_supplied_node_id = %request.node_id,
+                                        "ignoring client-supplied node_id in refresh_token_request",
+                                    );
                                 }
                                 match state.registry.refresh_token(&node_id).await {
                                     Ok((new_token, expires_at)) => {
