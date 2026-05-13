@@ -19,28 +19,26 @@ mod sanitize;
 mod snapshot;
 mod state;
 mod ui;
+mod ws;
 
-use std::collections::{HashMap, VecDeque};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use axum::extract::ConnectInfo;
 use axum::extract::Query;
 use axum::extract::Request;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{AppendHeaders, Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{Duration as ChronoDuration, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use clap::{Parser, Subcommand};
-use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::net::TcpListener;
@@ -48,14 +46,10 @@ use tokio::time::{MissedTickBehavior, interval};
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 use url::Url;
-use ximonitor_proto::{
-    HelloMessage, MetricsMessage, PingMessage, PongMessage, ServerConfig, ServerNoticeMessage,
-    WireMessage, parse_server_config,
-};
+use ximonitor_proto::{ServerConfig, parse_server_config};
 
 use crate::admission::{
-    InstallAdmissionConfig, InstallAdmissionController, WsAdmissionController, WsConnectionPermit,
-    resolve_client_ip, ws_admission_error_response,
+    InstallAdmissionConfig, InstallAdmissionController, WsAdmissionController, resolve_client_ip,
 };
 use crate::auth::{
     ReadonlyRouteAuth, TWO_FACTOR_AUTH_COOKIE, TWO_FACTOR_AUTH_SECS, TWO_FACTOR_PENDING_COOKIE,
@@ -67,13 +61,10 @@ use crate::registry::{
     IssueNodeRequest, NodeRegistry, build_install_script_url, default_agent_release_base_url,
     issue_node, render_agent_config, render_install_command, render_upgrade_command,
 };
-use crate::sanitize::{
-    METRIC_ANOMALY_SESSION_LIMIT, METRIC_ANOMALY_WINDOW_SECS, sanitize_snapshot,
-    should_disconnect_for_metric_anomalies, update_metric_anomaly_window,
-};
 use crate::snapshot::{load_snapshot, persist_snapshot, spawn_snapshot_persistor};
 use crate::state::SharedState;
 use crate::ui::{UI_I18N_JSON, index_html, node_html};
+use crate::ws::ws_handler;
 
 /// 顶层命令行参数。
 #[derive(Debug, Parser)]
@@ -114,18 +105,18 @@ struct NodeCommandArgs {
 
 /// 在各处理器之间共享的运行时上下文。
 #[derive(Clone)]
-struct AppState {
-    history: HistoryStore,
-    install_admission: InstallAdmissionController,
+pub(crate) struct AppState {
+    pub(crate) history: HistoryStore,
+    pub(crate) install_admission: InstallAdmissionController,
     /// `/api/verify-2fa` 的 IP 维度限流器:与 `install_admission` 同型,
     /// 但实例独立,避免安装接口的失败计数误伤 2FA 登录,反之亦然。
-    verify_2fa_admission: InstallAdmissionController,
-    readiness: ServerReadiness,
-    registry: NodeRegistry,
-    shared: SharedState,
-    ws_admission: WsAdmissionController,
-    readonly_auth: ReadonlyRouteAuth,
-    two_factor_sessions: TwoFactorSessions,
+    pub(crate) verify_2fa_admission: InstallAdmissionController,
+    pub(crate) readiness: ServerReadiness,
+    pub(crate) registry: NodeRegistry,
+    pub(crate) shared: SharedState,
+    pub(crate) ws_admission: WsAdmissionController,
+    pub(crate) readonly_auth: ReadonlyRouteAuth,
+    pub(crate) two_factor_sessions: TwoFactorSessions,
 }
 
 /// 只跟踪"对外是否可服务"所需的几个关键依赖状态。
@@ -158,36 +149,10 @@ struct IssuedNodeBundle {
     agent_release_base_url: String,
 }
 
-/// WebSocket 处理流程中的错误来源区分:
-/// `Client` 表示因对方原因(协议错误、未认证)而断开,只记 warn;
-/// `Server` 表示我们这边出现异常,记 error。
-#[derive(Debug)]
-enum ProtocolError {
-    Client(String),
-    Server(anyhow::Error),
-}
-
-/// 单帧解析结果:
-/// `Wire` 是携带 JSON 业务消息的文本帧;
-/// `Control` 是底层心跳(Ping/Pong)等,无需上层处理;
-/// `Close` 表示对方发起了关闭。
-#[derive(Debug)]
-enum ParsedFrame {
-    Wire(Box<WireMessage>),
-    Control,
-    Close,
-}
-
 /// 把 `scripts/install-agent.sh` 在编译期嵌入到二进制内。
 const INSTALL_AGENT_SCRIPT: &str = include_str!("../../scripts/install-agent.sh");
-/// 等待 Hello 报文的超时时间(秒)。
-const HELLO_TIMEOUT_SECS: u64 = 10;
-/// 同时未应答的 Ping 上限,超过后会丢弃最老的一条,避免内存占用无限增长。
-const MAX_OUTSTANDING_PINGS: usize = 32;
 /// 不安全传输警告的输出间隔(秒)。
 const INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
-/// Token 距离过期不足该天数时,服务端在已认证会话内主动轮换并下发新 token。
-const AGENT_TOKEN_REFRESH_BEFORE_EXPIRY_DAYS: i64 = 7;
 /// 历史接口默认查询窗口(小时)。
 const DEFAULT_HISTORY_WINDOW_HOURS: u64 = 24;
 /// 历史接口默认返回的样本点数。
@@ -204,12 +169,6 @@ struct HistoryQuery {
     max_points: Option<usize>,
     start: Option<i64>,
     end: Option<i64>,
-}
-
-impl From<anyhow::Error> for ProtocolError {
-    fn from(error: anyhow::Error) -> Self {
-        Self::Server(error)
-    }
 }
 
 impl ServerReadiness {
@@ -991,406 +950,6 @@ async fn node_history(
     }
 }
 
-/// `/ws` 入口:在 WebSocket 升级前先做准入检查与帧大小限制。
-async fn ws_handler(
-    State(state): State<AppState>,
-    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    ws: WebSocketUpgrade,
-) -> impl IntoResponse {
-    let max_message_bytes = state.shared.config().max_message_bytes;
-    let client_ip = resolve_client_ip(state.shared.config().listen, peer_addr, &headers);
-    let connection_permit = match state.ws_admission.try_acquire(client_ip) {
-        Ok(permit) => permit,
-        Err(error) => return ws_admission_error_response(error),
-    };
-    ws.max_frame_size(max_message_bytes)
-        .max_message_size(max_message_bytes)
-        .on_upgrade(move |socket| async move {
-            if let Err(error) = handle_socket(state, client_ip, connection_permit, socket).await {
-                match error {
-                    ProtocolError::Client(message) => {
-                        warn!(reason = %message, "websocket client disconnected");
-                    }
-                    ProtocolError::Server(error) => {
-                        error!(error = ?error, "websocket session failed");
-                    }
-                }
-            }
-        })
-}
-
-/// 一次完整的 WebSocket 会话:握手 → 认证 → 数据循环 → 资源回收。
-async fn handle_socket(
-    state: AppState,
-    client_ip: IpAddr,
-    _connection_permit: WsConnectionPermit,
-    mut socket: WebSocket,
-) -> Result<(), ProtocolError> {
-    let shared = state.shared.clone();
-    let hello = match tokio::time::timeout(
-        Duration::from_secs(HELLO_TIMEOUT_SECS),
-        recv_hello(&mut socket),
-    )
-    .await
-    {
-        Ok(Ok(hello)) => hello,
-        Ok(Err(error)) => {
-            state.ws_admission.record_auth_failure(client_ip);
-            return Err(error);
-        }
-        Err(_) => {
-            state.ws_admission.record_auth_failure(client_ip);
-            return Err(ProtocolError::Client(
-                "timed out waiting for hello message".to_string(),
-            ));
-        }
-    };
-    let mut session_token = hello.token.clone();
-    let identity = match state
-        .registry
-        .authorize(&hello.identity, &session_token)
-        .await
-    {
-        Ok(identity) => identity,
-        Err(error) => {
-            warn!(
-                client_ip = %client_ip,
-                requested_node_id = %hello.identity.node_id,
-                error = ?error,
-                "websocket authentication rejected",
-            );
-            state.ws_admission.record_auth_failure(client_ip);
-
-            // 拒绝前先通过 ServerNotice 告知 Agent 失败原因,使 Agent 端日志
-            // 与运维报警能直接区分"token 过期需要重新颁发"与"通用拒绝"。
-            // 发送失败不影响后续关闭逻辑;只是 best-effort 的诊断信息。
-            let error_msg = error.to_string();
-            let (notice_message, error_label): (&str, &str) = if error_msg.contains("token expired")
-            {
-                (
-                    "token expired; run `ximonitor-server install-agent --rotate-token` and reinstall this node",
-                    "token expired",
-                )
-            } else {
-                ("unauthorized", "unauthorized")
-            };
-            let notice = WireMessage::ServerNotice(ServerNoticeMessage {
-                level: ximonitor_proto::NoticeLevel::Error,
-                message: notice_message.to_string(),
-            });
-            let _ = send_wire_message(&mut socket, &notice).await;
-            return Err(ProtocolError::Client(error_label.to_string()));
-        }
-    };
-    state.ws_admission.clear_auth_failures(client_ip);
-
-    let node_id = identity.node_id.clone();
-    let node_label = identity.node_label.clone();
-    let session_id = shared
-        .register_node(identity, Some(client_ip.to_string()))
-        .await;
-
-    info!(node_id = %node_id, node_label = %node_label, session_id, "node authenticated");
-
-    let session_result: Result<(), ProtocolError> = async {
-        let notice = WireMessage::ServerNotice(ServerNoticeMessage {
-            level: ximonitor_proto::NoticeLevel::Info,
-            message: "authenticated".to_string(),
-        });
-        send_wire_message(&mut socket, &notice).await?;
-
-        let (mut sender, mut receiver) = socket.split();
-        let ping_every = Duration::from_secs(shared.config().ping_interval_secs);
-        let ping_expiry = Duration::from_secs(shared.config().ping_interval_secs.saturating_mul(3));
-        let mut ping_ticker = interval(ping_every);
-        // 会话挂起/恢复后不要"补打"积压的 tick,否则会瞬间灌满 outstanding_pings。
-        ping_ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let mut outstanding_pings: HashMap<u64, Instant> = HashMap::new();
-        let mut next_ping_nonce = 1_u64;
-        let mut metric_anomaly_window: VecDeque<Instant> = VecDeque::new();
-
-        loop {
-            tokio::select! {
-                incoming = receiver.next() => {
-                    let Some(frame) = incoming else {
-                        break Ok(());
-                    };
-                    let frame = frame.map_err(|error| anyhow!("websocket receive failed: {error}"))?;
-
-                    match parse_wire_message(frame)? {
-                        ParsedFrame::Close => break Ok(()),
-                        ParsedFrame::Control => continue,
-                        ParsedFrame::Wire(message) => match *message {
-                            WireMessage::Metrics(MetricsMessage { snapshot }) => {
-                                if !state.registry.is_token_current(&node_id, &session_token).await {
-                                    warn!(node_id = %node_id, "disconnecting session after registry token change");
-                                    break Ok(());
-                                }
-                                let (snapshot, report) = sanitize_snapshot(shared.config(), snapshot);
-                                if report.modified() {
-                                    update_metric_anomaly_window(
-                                        &mut metric_anomaly_window,
-                                        &report,
-                                        Instant::now(),
-                                    );
-                                    warn!(
-                                        node_id = %node_id,
-                                        session_id,
-                                        anomalies = report.total(),
-                                        anomaly_window_size = metric_anomaly_window.len(),
-                                        "agent reported out-of-range metrics; clamped before persistence",
-                                    );
-                                    if should_disconnect_for_metric_anomalies(&metric_anomaly_window) {
-                                        warn!(
-                                            node_id = %node_id,
-                                            session_id,
-                                            limit = METRIC_ANOMALY_SESSION_LIMIT,
-                                            window_secs = METRIC_ANOMALY_WINDOW_SECS,
-                                            "disconnecting session after repeated metric anomalies",
-                                        );
-                                        break Ok(());
-                                    }
-                                }
-                                let Some(status) = shared.update_snapshot(&node_id, session_id, snapshot).await else {
-                                    warn!(node_id = %node_id, session_id, "dropping metrics from superseded session");
-                                    break Ok(());
-                                };
-                                state.history.record_status(&status).await;
-                            }
-                            WireMessage::Pong(PongMessage { nonce }) => {
-                                if !state.registry.is_token_current(&node_id, &session_token).await {
-                                    warn!(node_id = %node_id, "disconnecting session after registry token change");
-                                    break Ok(());
-                                }
-                                let Some(sent_at) = outstanding_pings.remove(&nonce) else {
-                                    continue;
-                                };
-                                let latency_ms = sent_at.elapsed().as_millis() as u64;
-                                if !shared.update_latency(&node_id, session_id, latency_ms).await {
-                                    warn!(node_id = %node_id, session_id, "dropping pong from superseded session");
-                                    break Ok(());
-                                }
-                            }
-                            WireMessage::Hello(_) => {
-                                break Err(ProtocolError::Client("duplicate hello message".to_string()));
-                            }
-                            WireMessage::Ping(_) => {
-                                break Err(ProtocolError::Client("agent must not send ping messages".to_string()));
-                            }
-                            WireMessage::ServerNotice(_) => {
-                                break Err(ProtocolError::Client("agent must not send server_notice messages".to_string()));
-                            }
-                            WireMessage::RefreshTokenRequest(request) => {
-                                // `request.node_id` 完全由客户端控制,我们不应该
-                                // 信任它来决定"为谁刷 token"。会话握手期间的认证
-                                // 已经把这条连接绑定到 `node_id`,接下来所有的
-                                // refresh 都只对它生效。字段保留是为了不破坏旧
-                                // Agent 的请求格式;如果客户端发了别的 node_id,
-                                // 那要么是 bug 要么是恶意,但都不会得到非本会话
-                                // 节点的 token。这里 silently ignore + debug 记录
-                                // 即可,而不再像以前那样直接断开连接。
-                                if request.node_id != node_id {
-                                    warn!(
-                                        session_node_id = %node_id,
-                                        client_supplied_node_id = %request.node_id,
-                                        "ignoring client-supplied node_id in refresh_token_request",
-                                    );
-                                }
-                                match state.registry.refresh_token(&node_id).await {
-                                    Ok((new_token, expires_at)) => {
-                                        let response = WireMessage::RefreshTokenResponse(
-                                            ximonitor_proto::RefreshTokenResponseMessage {
-                                                new_token: new_token.clone(),
-                                                expires_at: expires_at.to_rfc3339(),
-                                            },
-                                        );
-                                        let payload = serde_json::to_string(&response)
-                                            .map_err(|error| anyhow!("failed to serialize refresh response: {error}"))?;
-                                        // 先发送、再替换本地 session_token。理由同
-                                        // `maybe_refresh_agent_token`:send 失败时不能
-                                        // 让 server 进入一个 agent 看不到的新状态。
-                                        sender
-                                            .send(Message::Text(payload.into()))
-                                            .await
-                                            .map_err(|error| anyhow!("failed to send refresh response: {error}"))?;
-                                        session_token = new_token;
-                                        info!(node_id = %node_id, "token refreshed successfully");
-                                    }
-                                    Err(error) => {
-                                        warn!(node_id = %node_id, error = ?error, "failed to refresh token");
-                                        let notice = WireMessage::ServerNotice(ServerNoticeMessage {
-                                            level: ximonitor_proto::NoticeLevel::Error,
-                                            message: "Failed to refresh token".to_string(),
-                                        });
-                                        let payload = serde_json::to_string(&notice)
-                                            .map_err(|error| anyhow!("failed to serialize notice: {error}"))?;
-                                        sender
-                                            .send(Message::Text(payload.into()))
-                                            .await
-                                            .map_err(|error| anyhow!("failed to send notice: {error}"))?;
-                                    }
-                                }
-                            }
-                            WireMessage::RefreshTokenResponse(_) => {
-                                break Err(ProtocolError::Client("agent must not send refresh_token_response messages".to_string()));
-                            }
-                        },
-                    }
-                }
-                _ = ping_ticker.tick() => {
-                    if !shared.is_current_session(&node_id, session_id).await {
-                        warn!(node_id = %node_id, session_id, "closing superseded websocket session");
-                        break Ok(());
-                    }
-                    if !state.registry.is_token_current(&node_id, &session_token).await {
-                        warn!(node_id = %node_id, "closing websocket session after registry token change");
-                        break Ok(());
-                    }
-                    if let Some(refresh) = maybe_refresh_agent_token(
-                        &state.registry,
-                        &node_id,
-                    )
-                    .await?
-                    {
-                        // 关键顺序:registry 已经在 refresh 内写盘,但本地
-                        // session_token 只有在帧成功推到 TCP 缓冲区后才替换 ——
-                        // 否则一旦 send 失败,我们就会处在"server 内存里是
-                        // 新 token、agent 持有旧 token"的不一致状态。
-                        // send 失败时 bubble 出去触发 session 结束,is_token_current
-                        // 在下一轮会发现 registry 已经轮换,让 agent 重连。
-                        sender
-                            .send(Message::Text(refresh.payload.into()))
-                            .await
-                            .map_err(|error| anyhow!("failed to send token refresh response: {error}"))?;
-                        session_token = refresh.new_token;
-                    }
-
-                    prune_outstanding_pings(&mut outstanding_pings, ping_expiry);
-                    let nonce = next_ping_nonce;
-                    next_ping_nonce = next_ping_nonce.saturating_add(1);
-                    outstanding_pings.insert(nonce, Instant::now());
-                    let ping = serde_json::to_string(&WireMessage::Ping(PingMessage { nonce }))
-                        .map_err(|error| anyhow!("failed to serialize ping: {error}"))?;
-                    sender
-                        .send(Message::Text(ping.into()))
-                        .await
-                        .map_err(|error| anyhow!("failed to send ping: {error}"))?;
-                }
-            }
-        }
-    }
-    .await;
-
-    shared.mark_disconnected(&node_id, session_id).await;
-    info!(node_id = %node_id, session_id, "node disconnected");
-    session_result
-}
-
-/// 临近过期时颁发新 token,把"序列化好的 JSON 帧 + 对应的新 token"打包返回。
-///
-/// 调用方负责把 `payload` 推送出去后再把自己的 `session_token` 替换成
-/// `new_token`,以保证两端视图同步:registry 内是新 token,agent 还没收到 → 暂时
-/// 不一致,但 server 内存里也仍持有旧 token,`is_token_current` 会在下一轮发现
-/// 不一致并主动关闭 session,从而触发 agent 重连。如果交换顺序,反而会让
-/// server 误以为已经协商完成,继续在新 token 下与一个仍持旧 token 的 agent
-/// 通信,最终走到 "wrong token" 的硬拒绝。
-struct PreparedTokenRefresh {
-    payload: String,
-    new_token: String,
-}
-
-async fn maybe_refresh_agent_token(
-    registry: &NodeRegistry,
-    node_id: &str,
-) -> Result<Option<PreparedTokenRefresh>> {
-    let refresh_after = Utc::now() + ChronoDuration::days(AGENT_TOKEN_REFRESH_BEFORE_EXPIRY_DAYS);
-    let should_refresh = registry
-        .token_expires_at(node_id)
-        .await
-        .is_none_or(|expires_at| expires_at <= refresh_after);
-    if !should_refresh {
-        return Ok(None);
-    }
-
-    let (new_token, expires_at) = registry.refresh_token(node_id).await?;
-    info!(
-        node_id = %node_id,
-        expires_at = %expires_at.to_rfc3339(),
-        "refreshed agent token before expiry",
-    );
-    let response =
-        WireMessage::RefreshTokenResponse(ximonitor_proto::RefreshTokenResponseMessage {
-            new_token: new_token.clone(),
-            expires_at: expires_at.to_rfc3339(),
-        });
-    let payload = serde_json::to_string(&response)
-        .map_err(|error| anyhow!("failed to serialize token refresh response: {error}"))?;
-    Ok(Some(PreparedTokenRefresh { payload, new_token }))
-}
-
-/// 阻塞接收 Hello 帧;期间收到的 Ping/Pong 等控制帧会被忽略,其他业务帧视为协议错误。
-async fn recv_hello(socket: &mut WebSocket) -> Result<HelloMessage, ProtocolError> {
-    loop {
-        let Some(message) = socket
-            .recv()
-            .await
-            .transpose()
-            .map_err(|error| anyhow!("failed to receive hello: {error}"))?
-        else {
-            return Err(ProtocolError::Client(
-                "connection closed before hello message".to_string(),
-            ));
-        };
-
-        match parse_wire_message(message)? {
-            ParsedFrame::Control => continue,
-            ParsedFrame::Wire(message) => match *message {
-                WireMessage::Hello(hello) => return Ok(hello),
-                _ => {
-                    return Err(ProtocolError::Client(
-                        "first websocket message must be hello".to_string(),
-                    ));
-                }
-            },
-            ParsedFrame::Close => {
-                return Err(ProtocolError::Client(
-                    "connection closed before hello message".to_string(),
-                ));
-            }
-        }
-    }
-}
-
-/// 解析底层 WebSocket 帧,把它归类为业务消息 / 控制帧 / 关闭。
-fn parse_wire_message(message: Message) -> Result<ParsedFrame, ProtocolError> {
-    match message {
-        Message::Text(text) => serde_json::from_str::<WireMessage>(&text)
-            .map(Box::new)
-            .map(ParsedFrame::Wire)
-            .map_err(|error| ProtocolError::Client(format!("invalid websocket json: {error}"))),
-        Message::Binary(_) => Err(ProtocolError::Client(
-            "binary websocket messages are not supported".to_string(),
-        )),
-        Message::Close(_) => Ok(ParsedFrame::Close),
-        Message::Ping(_) | Message::Pong(_) => Ok(ParsedFrame::Control),
-    }
-}
-
-/// 把 `WireMessage` 序列化为 JSON 文本帧后发送。
-async fn send_wire_message(
-    socket: &mut WebSocket,
-    message: &WireMessage,
-) -> Result<(), ProtocolError> {
-    let payload = serde_json::to_string(message)
-        .map_err(|error| anyhow!("failed to serialize websocket message: {error}"))?;
-    socket
-        .send(Message::Text(payload.into()))
-        .await
-        .map_err(|error| anyhow!("failed to send websocket message: {error}"))?;
-    Ok(())
-}
-
 /// 后台任务:每秒扫描一次注册表,把超时节点标记为离线。
 fn spawn_stale_reaper(shared: SharedState) {
     tokio::spawn(async move {
@@ -1520,23 +1079,6 @@ async fn restore_snapshot_if_available(shared: &SharedState, path: &Path) {
     }
 }
 
-/// 清理"过期或过多"的 Ping 记录,避免在 Agent 异常时无限制堆积。
-fn prune_outstanding_pings(outstanding_pings: &mut HashMap<u64, Instant>, max_age: Duration) {
-    outstanding_pings.retain(|_, sent_at| sent_at.elapsed() < max_age);
-
-    if outstanding_pings.len() < MAX_OUTSTANDING_PINGS {
-        return;
-    }
-
-    if let Some(oldest_nonce) = outstanding_pings
-        .iter()
-        .min_by_key(|(_, sent_at)| *sent_at)
-        .map(|(nonce, _)| *nonce)
-    {
-        outstanding_pings.remove(&oldest_nonce);
-    }
-}
-
 /// 初始化 `tracing` 日志,支持通过 `RUST_LOG` 调整级别。
 fn init_tracing() {
     tracing_subscriber::fmt()
@@ -1599,10 +1141,10 @@ mod tests {
     use tokio::runtime::Runtime;
 
     use super::{
-        AppState, METRIC_ANOMALY_SESSION_LIMIT, ReadonlyRouteAuth, ServerReadiness,
-        TwoFactorSessions, bootstrap, healthz, index, install_agent_script, install_bootstrap,
-        is_well_formed_install_token, node_detail, node_history, node_status, nodes, overview,
-        readyz, ui_i18n_asset, uses_insecure_remote_public_base_url, ws_handler,
+        AppState, ReadonlyRouteAuth, ServerReadiness, TwoFactorSessions, bootstrap, healthz, index,
+        install_agent_script, install_bootstrap, is_well_formed_install_token, node_detail,
+        node_history, node_status, nodes, overview, readyz, ui_i18n_asset,
+        uses_insecure_remote_public_base_url, ws_handler,
     };
     use crate::admission::{
         InstallAdmissionConfig, InstallAdmissionController, WsAdmissionController,
@@ -1612,8 +1154,8 @@ mod tests {
     use crate::registry::{IssueNodeRequest, NodeRegistry, issue_node};
     use crate::sanitize::{
         MAX_SANITIZED_DISKS, MAX_SANITIZED_LOAD, MAX_SANITIZED_RATE_BYTES_PER_SEC,
-        MAX_SANITIZED_STRING_BYTES, SanitizationReport, sanitize_snapshot,
-        should_disconnect_for_metric_anomalies, truncate_to_byte_boundary,
+        MAX_SANITIZED_STRING_BYTES, METRIC_ANOMALY_SESSION_LIMIT, SanitizationReport,
+        sanitize_snapshot, should_disconnect_for_metric_anomalies, truncate_to_byte_boundary,
         update_metric_anomaly_window,
     };
     use crate::state::SharedState;
@@ -1767,8 +1309,12 @@ mod tests {
 
     #[test]
     fn constant_time_compare_matches_only_identical_byte_slices() {
-        assert!(crate::auth::constant_time_compare_bytes(b"abc123", b"abc123"));
-        assert!(!crate::auth::constant_time_compare_bytes(b"abc123", b"abc124"));
+        assert!(crate::auth::constant_time_compare_bytes(
+            b"abc123", b"abc123"
+        ));
+        assert!(!crate::auth::constant_time_compare_bytes(
+            b"abc123", b"abc124"
+        ));
         assert!(!crate::auth::constant_time_compare_bytes(b"abc", b"abc1"));
         assert!(!crate::auth::constant_time_compare_bytes(b"", b"a"));
         assert!(crate::auth::constant_time_compare_bytes(b"", b""));
