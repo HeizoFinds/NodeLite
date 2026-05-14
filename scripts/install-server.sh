@@ -43,13 +43,35 @@ cleanup() {
 
 trap cleanup EXIT HUP INT TERM
 
+# 检测当前脚本是否真正绑定了可读写的控制终端。
+has_tty() {
+  : </dev/tty >/dev/null 2>&1
+}
+
+# 统一输出一整行文本。
+tty_println() {
+  if has_tty; then
+    printf '%s\n' "$*" >/dev/tty
+  else
+    printf '%s\n' "$*"
+  fi
+}
+
 # 清屏:优先使用 `clear`,否则发送 ANSI 序列。
 clear_screen() {
-  if command -v clear >/dev/null 2>&1; then
-    clear
+  if ! has_tty; then
     return 0
   fi
-  printf '\033c'
+  case "${TERM:-}" in
+    ""|dumb)
+      return 0
+      ;;
+  esac
+  if command -v clear >/dev/null 2>&1; then
+    clear >/dev/tty 2>/dev/null || true
+    return 0
+  fi
+  printf '\033c' >/dev/tty 2>/dev/null || true
 }
 
 # 通用交互式读取:提供默认值,空输入将沿用默认值。
@@ -402,9 +424,9 @@ need_cmd uname
 
 clear_screen
 
-printf '%s\n' "XiMonitor Server Installer" >/dev/tty
-printf '%s\n' "This script installs the latest XiMonitor server release from GitHub." >/dev/tty
-printf '\n' >/dev/tty
+tty_println "XiMonitor Server Installer"
+tty_println "This script installs the latest XiMonitor server release from GitHub."
+tty_println ""
 
 validate_mode "$MODE"
 
@@ -583,22 +605,22 @@ systemctl restart "$SERVICE_NAME.service"
 
 clear_screen
 if [ "$MODE" = "upgrade" ]; then
-  printf '%s\n' "XiMonitor server upgraded and restarted." >/dev/tty
+  tty_println "XiMonitor server upgraded and restarted."
 elif [ "$MODE" = "migrate" ]; then
-  printf '%s\n' "XiMonitor server migrated, upgraded, and restarted." >/dev/tty
+  tty_println "XiMonitor server migrated, upgraded, and restarted."
 else
-  printf '%s\n' "XiMonitor server installed and started." >/dev/tty
+  tty_println "XiMonitor server installed and started."
 fi
-printf '%s\n' "Binary: $BIN_PATH" >/dev/tty
-printf '%s\n' "Config: $CONFIG_PATH" >/dev/tty
-printf '%s\n' "Registry: $REGISTRY_PATH" >/dev/tty
+tty_println "Binary: $BIN_PATH"
+tty_println "Config: $CONFIG_PATH"
+tty_println "Registry: $REGISTRY_PATH"
 if [ "$MODE" = "upgrade" ]; then
-  printf '%s\n' "Config preserved: existing server.toml and readonly credentials were kept." >/dev/tty
+  tty_println "Config preserved: existing server.toml and readonly credentials were kept."
 else
-  printf '%s\n' "Readonly username: $READONLY_USERNAME" >/dev/tty
-  printf '%s\n' "Readonly password: $READONLY_PASSWORD" >/dev/tty
-  printf '%s\n' "Public base URL: ${PUBLIC_SCHEME}://${PUBLIC_HOST}" >/dev/tty
+  tty_println "Readonly username: $READONLY_USERNAME"
+  tty_println "Readonly password: $READONLY_PASSWORD"
+  tty_println "Public base URL: ${PUBLIC_SCHEME}://${PUBLIC_HOST}"
 fi
-printf '\n' >/dev/tty
-printf '%s\n' "Next step: enroll an agent from this server with:" >/dev/tty
-printf '%s\n' "  $BIN_PATH --config $CONFIG_PATH install-agent --node-id hk-01 --node-label \"Hong Kong 01\"" >/dev/tty
+tty_println ""
+tty_println "Next step: enroll an agent from this server with:"
+tty_println "  $BIN_PATH --config $CONFIG_PATH install-agent --node-id hk-01 --node-label \"Hong Kong 01\""
