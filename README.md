@@ -81,6 +81,30 @@ curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/ins
 
 得益于 Rust 的零成本抽象和高效内存管理，XiMonitor 在保持功能完整的同时实现了极低的资源占用。
 
+### 压测基线
+
+下面这组数据来自仓库内置的真实 loopback 压测：
+
+```bash
+cargo test -p ximonitor-server load_test_scaling_scores -- --ignored --nocapture
+```
+
+测试机为 `Apple M1 Pro / 32 GB`，通过真实 WebSocket 建链、真实 `metrics` 上报和真实 `/api/overview` 轮询得到以下基线成绩：
+
+| 节点数 | 全部接入耗时 | 收敛耗时 | 总 metrics 数 | metrics 吞吐 | overview p50 | overview p95 | overview max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 20 | 4.4 ms | 20.9 ms | 240 | 11461.3/s | 0.70 ms | 1.20 ms | 1.74 ms |
+| 50 | 14.3 ms | 43.3 ms | 600 | 13860.1/s | 1.22 ms | 1.73 ms | 4.50 ms |
+| 100 | 9.8 ms | 88.1 ms | 1200 | 13617.9/s | 0.94 ms | 6.77 ms | 7.77 ms |
+| 200 | 36.9 ms | 128.5 ms | 2400 | 18677.0/s | 1.02 ms | 3.81 ms | 12.17 ms |
+
+说明：
+
+- 这里的“接入耗时”指批量节点建立 WebSocket 并完成认证的时间。
+- “收敛耗时”指最后一轮指标上报与面板总览 API 延迟稳定下来的时间。
+- 这组成绩主要用于公开展示项目的量级感，不等同于生产 SLA。
+- 实际表现会受到构建模式、反向代理、SQLite I/O、历史保留时长和宿主机网络条件影响。
+
 ## 当前能力
 
 - 一键安装与升级：
