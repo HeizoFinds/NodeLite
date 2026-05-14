@@ -6,7 +6,7 @@
 // - 自清理:每 5 分钟最多触发一次 `DELETE`,把超过保留期的旧记录删除。
 // - 自降级:数据库初始化失败时不阻断服务,而是把 `available=false`,实时视图照常运行。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -208,6 +208,15 @@ impl HistoryStore {
         })
         .await
         .context("history range query task failed")?
+    }
+
+    /// 清理已经不在注册表中的节点节流状态,避免长期运行时条目只增不减。
+    pub async fn forget_missing(&self, live_node_ids: &[String]) -> usize {
+        let live_node_ids: HashSet<&str> = live_node_ids.iter().map(String::as_str).collect();
+        let mut guard = self.last_written_at.lock().await;
+        let before = guard.len();
+        guard.retain(|node_id, _| live_node_ids.contains(node_id.as_str()));
+        before.saturating_sub(guard.len())
     }
 
     /// 判断是否需要在本次写入时附带执行一次过期记录删除。
@@ -523,6 +532,7 @@ fn average_optional_u64(values: impl Iterator<Item = Option<u64>>) -> Option<u64
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use chrono::{Duration, Utc};
@@ -532,7 +542,7 @@ mod tests {
         NodeStatus,
     };
 
-    use super::{build_history_point, initialize_database, write_history_point};
+    use super::{HistoryStore, build_history_point, initialize_database, write_history_point};
 
     #[test]
     fn history_point_uses_server_last_seen_timestamp() {
@@ -631,6 +641,30 @@ mod tests {
             let _ = std::fs::remove_file(&db_path);
             let _ = std::fs::remove_dir(&data_dir);
             let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn forget_missing_prunes_retired_nodes_from_write_throttle_state() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let store = HistoryStore::new(PathBuf::from("./data/history.sqlite3"));
+            {
+                let mut guard = store.last_written_at.lock().await;
+                guard.insert("hk-01".to_string(), Utc::now());
+                guard.insert("jp-01".to_string(), Utc::now());
+                guard.insert("us-01".to_string(), Utc::now());
+            }
+
+            let removed = store
+                .forget_missing(&["jp-01".to_string(), "us-01".to_string()])
+                .await;
+            assert_eq!(removed, 1);
+
+            let guard = store.last_written_at.lock().await;
+            assert!(!guard.contains_key("hk-01"));
+            assert!(guard.contains_key("jp-01"));
+            assert!(guard.contains_key("us-01"));
         });
     }
 

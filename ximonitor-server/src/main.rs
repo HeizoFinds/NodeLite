@@ -177,7 +177,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
     readiness.mark_history_available(history.is_available());
     restore_snapshot_if_available(&shared, config.snapshot_path.as_path()).await;
 
-    spawn_registry_reloader(registry.clone(), readiness.clone());
+    spawn_registry_reloader(registry.clone(), history.clone(), readiness.clone());
     spawn_stale_reaper(shared.clone());
     spawn_snapshot_persistor(shared.clone(), config.snapshot_path.clone());
     spawn_insecure_transport_warning(config.public_base_url.clone(), config.listen);
@@ -392,7 +392,11 @@ fn spawn_stale_reaper(shared: SharedState) {
 }
 
 /// 后台任务:每秒检查一次注册表文件是否有外部更改(例如 CLI 颁发了新节点)。
-fn spawn_registry_reloader(registry: NodeRegistry, readiness: ServerReadiness) {
+fn spawn_registry_reloader(
+    registry: NodeRegistry,
+    history: HistoryStore,
+    readiness: ServerReadiness,
+) {
     tokio::spawn(async move {
         let mut ticker = interval(Duration::from_secs(1));
         // 挂起恢复后只想做一次最近态的 reload,而不是连续 N 次磁盘 IO。
@@ -403,9 +407,12 @@ fn spawn_registry_reloader(registry: NodeRegistry, readiness: ServerReadiness) {
                 Ok(true) => {
                     readiness.mark_registry_reload_healthy(true);
                     let enrolled_nodes = registry.count().await;
+                    let node_ids = registry.node_ids().await;
+                    let cleaned_history_nodes = history.forget_missing(&node_ids).await;
                     info!(
                         registry_path = %registry.path().display(),
                         enrolled_nodes,
+                        cleaned_history_nodes,
                         "reloaded node registry",
                     );
                 }

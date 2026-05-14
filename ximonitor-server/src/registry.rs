@@ -197,6 +197,14 @@ impl NodeRegistry {
         nodes
     }
 
+    /// 返回当前注册表里的全部 node_id,用于跨模块做被动清理。
+    pub async fn node_ids(&self) -> Vec<String> {
+        let state = self.state.read().await;
+        let mut node_ids: Vec<_> = state.entries.keys().cloned().collect();
+        node_ids.sort();
+        node_ids
+    }
+
     /// 一次性消费安装令牌:成功时返回对应的 `RegisteredNode`,并把令牌从注册表移除。
     pub async fn consume_install_token(&self, token: &str) -> Result<Option<RegisteredNode>> {
         validate_non_empty("install token", token)?;
