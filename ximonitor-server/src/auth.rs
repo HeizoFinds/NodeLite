@@ -261,7 +261,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     output
 }
 
-fn decode_totp_secret(value: &str) -> Option<Vec<u8>> {
+pub fn decode_totp_secret(value: &str) -> Option<Vec<u8>> {
     let normalized = value.replace(' ', "").to_ascii_uppercase();
     base32::decode(base32::Alphabet::Rfc4648 { padding: false }, &normalized)
         .or_else(|| base32::decode(base32::Alphabet::Rfc4648 { padding: true }, &normalized))

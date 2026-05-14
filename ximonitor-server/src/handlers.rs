@@ -6,6 +6,7 @@ use axum::middleware::Next;
 use axum::response::{AppendHeaders, Html, IntoResponse, Response};
 use axum::{Json, extract::Request};
 use chrono::{DateTime, TimeZone, Utc};
+use getrandom::fill as fill_random;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tracing::error;
@@ -15,8 +16,10 @@ use crate::admission::resolve_client_ip;
 use crate::auth::{
     ReadonlyRouteAuth, TWO_FACTOR_AUTH_COOKIE, TWO_FACTOR_AUTH_SECS, TWO_FACTOR_PENDING_COOKIE,
     TWO_FACTOR_PENDING_SECS, Verify2FAError, Verify2FARequest, auth_cookie,
-    constant_time_compare_bytes, cookie_value, expire_cookie, secure_cookies, verify_totp_step,
+    constant_time_compare_bytes, cookie_value, decode_totp_secret, expire_cookie, secure_cookies,
+    verify_totp_step,
 };
+use crate::qr::qr_svg_for_text;
 use crate::registry::render_agent_config;
 use crate::ui::{UI_I18N_JSON, index_html, node_html};
 use ximonitor_proto::{DEFAULT_HISTORY_RETENTION_HOURS, ReadonlyAuthConfig, parse_server_config};
@@ -94,6 +97,26 @@ pub(crate) struct SettingsAgentToken {
 pub(crate) struct ChangePasswordRequest {
     current_password: String,
     new_password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct TwoFactorSetupResponse {
+    secret: String,
+    otpauth_uri: String,
+    qr_svg: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct EnableTwoFactorRequest {
+    current_password: String,
+    secret: String,
+    code: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct DisableTwoFactorRequest {
+    current_password: String,
+    code: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -486,6 +509,193 @@ pub(crate) async fn change_readonly_password(
         .into_response()
 }
 
+/// 开始网页端 2FA 绑定:生成一个新 TOTP secret 和本地 SVG 二维码。
+///
+/// 注意这里不写配置文件;只有用户用认证器 App 扫码并输入正确验证码后,
+/// `enable_two_factor` 才会真正启用 2FA。
+pub(crate) async fn start_two_factor_setup(State(state): State<AppState>) -> Response {
+    let current_auth = {
+        let auth = state.readonly_auth.read().await;
+        auth.config.clone()
+    };
+    let Some(current_auth) = current_auth else {
+        return settings_json_error(StatusCode::CONFLICT, "readonly auth is not enabled");
+    };
+    if !state
+        .shared
+        .config()
+        .public_base_url
+        .starts_with("https://")
+    {
+        return settings_json_error(
+            StatusCode::CONFLICT,
+            "2FA setup requires server.public_base_url to use https://",
+        );
+    }
+
+    let secret = match generate_totp_secret() {
+        Ok(secret) => secret,
+        Err(error) => {
+            error!(error = ?error, "failed to generate TOTP secret");
+            return settings_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to generate TOTP secret",
+            );
+        }
+    };
+    let otpauth_uri = otpauth_uri(&current_auth.username, &secret);
+    let qr_svg = match qr_svg_for_text(&otpauth_uri) {
+        Ok(svg) => svg,
+        Err(error) => {
+            error!(error = ?error, "failed to render TOTP QR code");
+            return settings_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to render TOTP QR code",
+            );
+        }
+    };
+
+    Json(TwoFactorSetupResponse {
+        secret,
+        otpauth_uri,
+        qr_svg,
+    })
+    .into_response()
+}
+
+/// 启用 2FA:要求当前密码 + 新 secret 对应的 6 位 TOTP 验证码。
+pub(crate) async fn enable_two_factor(
+    State(state): State<AppState>,
+    Json(request): Json<EnableTwoFactorRequest>,
+) -> Response {
+    let current_auth = {
+        let auth = state.readonly_auth.read().await;
+        auth.config.clone()
+    };
+    let Some(current_auth) = current_auth else {
+        return settings_json_error(StatusCode::CONFLICT, "readonly auth is not enabled");
+    };
+    if !constant_time_compare_bytes(
+        current_auth.password.as_bytes(),
+        request.current_password.as_bytes(),
+    ) {
+        return settings_json_error(StatusCode::UNAUTHORIZED, "current password is incorrect");
+    }
+    let secret = request.secret.replace(' ', "").to_ascii_uppercase();
+    let Some(secret_bytes) = decode_totp_secret(&secret) else {
+        return settings_json_error(StatusCode::BAD_REQUEST, "invalid TOTP secret");
+    };
+    if secret_bytes.len() < 10 {
+        return settings_json_error(StatusCode::BAD_REQUEST, "invalid TOTP secret");
+    }
+    let Some(step) = verify_totp_step(Some(&secret_bytes), &request.code) else {
+        return settings_json_error(StatusCode::UNAUTHORIZED, "invalid verification code");
+    };
+    if state.two_factor_sessions.is_totp_step_used(step) {
+        return settings_json_error(StatusCode::UNAUTHORIZED, "verification code already used");
+    }
+    state.two_factor_sessions.mark_totp_step_used(step);
+
+    let next_auth = ReadonlyAuthConfig {
+        enable_2fa: true,
+        totp_secret: Some(secret),
+        ..current_auth
+    };
+    if let Err(error) = persist_auth_2fa_change(state.config_path.as_path(), &next_auth).await {
+        error!(error = ?error, path = %state.config_path.display(), "failed to persist 2FA enable");
+        return settings_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to persist 2FA settings",
+        );
+    }
+    {
+        let mut auth = state.readonly_auth.write().await;
+        *auth = ReadonlyRouteAuth::from_config(Some(next_auth));
+    }
+    state.two_factor_sessions.clear_authenticated();
+    let secure = secure_cookies(state.shared.config());
+    (
+        StatusCode::OK,
+        AppendHeaders([
+            expire_cookie(TWO_FACTOR_AUTH_COOKIE, secure),
+            expire_cookie(TWO_FACTOR_PENDING_COOKIE, secure),
+        ]),
+        Json(SettingsActionResponse {
+            ok: true,
+            message: "2FA enabled; please sign in again".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+/// 关闭 2FA:要求当前密码 + 当前 TOTP 验证码,避免无人值守浏览器被直接降级。
+pub(crate) async fn disable_two_factor(
+    State(state): State<AppState>,
+    Json(request): Json<DisableTwoFactorRequest>,
+) -> Response {
+    let current_auth = {
+        let auth = state.readonly_auth.read().await;
+        auth.config.clone()
+    };
+    let Some(current_auth) = current_auth else {
+        return settings_json_error(StatusCode::CONFLICT, "readonly auth is not enabled");
+    };
+    if !current_auth.enable_2fa {
+        return settings_json_error(StatusCode::CONFLICT, "2FA is not enabled");
+    }
+    if !constant_time_compare_bytes(
+        current_auth.password.as_bytes(),
+        request.current_password.as_bytes(),
+    ) {
+        return settings_json_error(StatusCode::UNAUTHORIZED, "current password is incorrect");
+    }
+    let Some(secret) = current_auth
+        .totp_secret
+        .as_deref()
+        .and_then(decode_totp_secret)
+    else {
+        return settings_json_error(StatusCode::CONFLICT, "2FA secret is not configured");
+    };
+    let Some(step) = verify_totp_step(Some(&secret), &request.code) else {
+        return settings_json_error(StatusCode::UNAUTHORIZED, "invalid verification code");
+    };
+    if state.two_factor_sessions.is_totp_step_used(step) {
+        return settings_json_error(StatusCode::UNAUTHORIZED, "verification code already used");
+    }
+    state.two_factor_sessions.mark_totp_step_used(step);
+
+    let next_auth = ReadonlyAuthConfig {
+        enable_2fa: false,
+        totp_secret: None,
+        ..current_auth
+    };
+    if let Err(error) = persist_auth_2fa_change(state.config_path.as_path(), &next_auth).await {
+        error!(error = ?error, path = %state.config_path.display(), "failed to persist 2FA disable");
+        return settings_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to persist 2FA settings",
+        );
+    }
+    {
+        let mut auth = state.readonly_auth.write().await;
+        *auth = ReadonlyRouteAuth::from_config(Some(next_auth));
+    }
+    state.two_factor_sessions.clear_authenticated();
+    let secure = secure_cookies(state.shared.config());
+    (
+        StatusCode::OK,
+        AppendHeaders([
+            expire_cookie(TWO_FACTOR_AUTH_COOKIE, secure),
+            expire_cookie(TWO_FACTOR_PENDING_COOKIE, secure),
+        ]),
+        Json(SettingsActionResponse {
+            ok: true,
+            message: "2FA disabled; please sign in again".to_string(),
+        }),
+    )
+        .into_response()
+}
+
 fn settings_json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (
         status,
@@ -514,6 +724,24 @@ async fn persist_auth_password_change(
 ) -> anyhow::Result<()> {
     let content = fs::read_to_string(path).await?;
     let updated = replace_auth_password(&content, password)?;
+    parse_server_config(&updated)
+        .map_err(|error| anyhow::anyhow!("updated server config would be invalid: {error}"))?;
+    let metadata = fs::metadata(path).await.ok();
+    let temp_path = path.with_extension("toml.tmp");
+    fs::write(&temp_path, updated).await?;
+    if let Some(metadata) = metadata {
+        fs::set_permissions(&temp_path, metadata.permissions()).await?;
+    }
+    fs::rename(&temp_path, path).await?;
+    Ok(())
+}
+
+async fn persist_auth_2fa_change(
+    path: &std::path::Path,
+    auth: &ReadonlyAuthConfig,
+) -> anyhow::Result<()> {
+    let content = fs::read_to_string(path).await?;
+    let updated = replace_auth_2fa(&content, auth.enable_2fa, auth.totp_secret.as_deref())?;
     parse_server_config(&updated)
         .map_err(|error| anyhow::anyhow!("updated server config would be invalid: {error}"))?;
     let metadata = fs::metadata(path).await.ok();
@@ -560,6 +788,123 @@ fn replace_auth_password(content: &str, password: &str) -> anyhow::Result<String
         output.push(format!("password = \"{escaped_password}\""));
     }
     Ok(format!("{}\n", output.join("\n")))
+}
+
+fn replace_auth_2fa(
+    content: &str,
+    enable_2fa: bool,
+    totp_secret: Option<&str>,
+) -> anyhow::Result<String> {
+    if enable_2fa && totp_secret.is_none() {
+        anyhow::bail!("totp_secret is required when enabling 2FA");
+    }
+
+    let mut output = Vec::new();
+    let mut in_auth = false;
+    let mut seen_auth = false;
+    let mut wrote_enable = false;
+    let mut wrote_secret = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if in_auth {
+                write_missing_2fa_lines(
+                    &mut output,
+                    enable_2fa,
+                    totp_secret,
+                    &mut wrote_enable,
+                    &mut wrote_secret,
+                );
+            }
+            in_auth = trimmed == "[auth]";
+            seen_auth |= in_auth;
+        }
+
+        if in_auth && is_toml_key(trimmed, "enable_2fa") {
+            let indent = &line[..line.len() - line.trim_start().len()];
+            output.push(format!("{indent}enable_2fa = {enable_2fa}"));
+            wrote_enable = true;
+            continue;
+        }
+        if in_auth && is_toml_key(trimmed, "totp_secret") {
+            if let Some(secret) = totp_secret {
+                let indent = &line[..line.len() - line.trim_start().len()];
+                output.push(format!(
+                    "{indent}totp_secret = \"{}\"",
+                    toml_basic_string(secret)
+                ));
+                wrote_secret = true;
+            }
+            continue;
+        }
+        output.push(line.to_string());
+    }
+
+    if !seen_auth {
+        anyhow::bail!("server.toml does not contain an [auth] section");
+    }
+    if in_auth {
+        write_missing_2fa_lines(
+            &mut output,
+            enable_2fa,
+            totp_secret,
+            &mut wrote_enable,
+            &mut wrote_secret,
+        );
+    }
+    Ok(format!("{}\n", output.join("\n")))
+}
+
+fn write_missing_2fa_lines(
+    output: &mut Vec<String>,
+    enable_2fa: bool,
+    totp_secret: Option<&str>,
+    wrote_enable: &mut bool,
+    wrote_secret: &mut bool,
+) {
+    if !*wrote_enable {
+        output.push(format!("enable_2fa = {enable_2fa}"));
+        *wrote_enable = true;
+    }
+    if let Some(secret) = totp_secret
+        && !*wrote_secret
+    {
+        output.push(format!("totp_secret = \"{}\"", toml_basic_string(secret)));
+        *wrote_secret = true;
+    }
+}
+
+fn generate_totp_secret() -> anyhow::Result<String> {
+    let mut bytes = [0_u8; 20];
+    fill_random(&mut bytes)?;
+    Ok(base32::encode(
+        base32::Alphabet::Rfc4648 { padding: false },
+        &bytes,
+    ))
+}
+
+fn otpauth_uri(username: &str, secret: &str) -> String {
+    let issuer = "XiMonitor";
+    format!(
+        "otpauth://totp/{}:{}?secret={}&issuer={}",
+        percent_encode_component(issuer),
+        percent_encode_component(username),
+        percent_encode_component(secret),
+        percent_encode_component(issuer)
+    )
+}
+
+fn percent_encode_component(value: &str) -> String {
+    let mut output = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            output.push(byte as char);
+        } else {
+            output.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    output
 }
 
 fn is_toml_key(trimmed: &str, key: &str) -> bool {
@@ -814,4 +1159,59 @@ fn bearer_token_from_request(request: &Request) -> Option<&str> {
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{otpauth_uri, replace_auth_2fa};
+
+    #[test]
+    fn replace_auth_2fa_enables_and_preserves_auth_section() {
+        let input = r#"[server]
+listen = "127.0.0.1:8080"
+public_base_url = "https://monitor.example.com"
+
+[auth]
+username = "viewer"
+password = "old-pass"
+
+[ui]
+refresh_interval_secs = 5
+"#;
+
+        let updated = replace_auth_2fa(input, true, Some("JBSWY3DPEHPK3PXP"))
+            .expect("2FA enable should update auth section");
+
+        assert!(updated.contains("username = \"viewer\""));
+        assert!(updated.contains("password = \"old-pass\""));
+        assert!(updated.contains("enable_2fa = true"));
+        assert!(updated.contains("totp_secret = \"JBSWY3DPEHPK3PXP\""));
+        assert!(updated.contains("[ui]"));
+    }
+
+    #[test]
+    fn replace_auth_2fa_disables_and_removes_stale_secret() {
+        let input = r#"[auth]
+username = "viewer"
+password = "old-pass"
+enable_2fa = true
+totp_secret = "JBSWY3DPEHPK3PXP"
+"#;
+
+        let updated =
+            replace_auth_2fa(input, false, None).expect("2FA disable should update auth section");
+
+        assert!(updated.contains("enable_2fa = false"));
+        assert!(!updated.contains("totp_secret"));
+    }
+
+    #[test]
+    fn otpauth_uri_percent_encodes_account_label() {
+        let uri = otpauth_uri("viewer@example.com", "JBSWY3DPEHPK3PXP");
+
+        assert_eq!(
+            uri,
+            "otpauth://totp/XiMonitor:viewer%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=XiMonitor"
+        );
+    }
 }
