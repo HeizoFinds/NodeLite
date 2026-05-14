@@ -1,12 +1,13 @@
 //! 手动压测入口。
 //!
 //! 这是一个 `#[ignore]` 的真实链路压测:
-//! - 启一个临时 server 实例(真实 `/ws` + `/api/overview`)
-//! - 模拟 N 个 agent 连接并发送一轮 metrics burst
-//! - 在 burst 期间并发探测 overview API 延迟
+//! - 启一个临时 server 实例(真实 `/ws` + `/api/*`)
+//! - 模拟 N 个 agent 连接并发送 burst / steady-state metrics
+//! - 在上报期间并发探测 overview / nodes / node / history 等读取路径
 //!
 //! 运行方式:
 //! `cargo test -p ximonitor-server load_test_scaling_scores -- --ignored --nocapture`
+//! `cargo test -p ximonitor-server load_test_api_surface_scores -- --ignored --nocapture`
 
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -31,14 +32,15 @@ use tokio_tungstenite::tungstenite::Message;
 use tower_http::trace::TraceLayer;
 use ximonitor_proto::{
     DiskUsage, HelloMessage, LoadAverage, MemoryUsage, MetricsMessage, NetworkCounters,
-    NodeIdentity, NodeSnapshot, ReadonlyAuthConfig, ServerConfig, WireMessage, WsConfig,
+    NodeIdentity, NodeSnapshot, NodeStatus, ReadonlyAuthConfig, ServerConfig, WireMessage,
+    WsConfig,
 };
 
 use crate::AppState;
 use crate::ServerReadiness;
 use crate::admission::{InstallAdmissionConfig, InstallAdmissionController, WsAdmissionController};
 use crate::auth::{ReadonlyRouteAuth, TwoFactorSessions};
-use crate::handlers::{overview, require_readonly_auth};
+use crate::handlers::{node_history, node_status, nodes, overview, require_readonly_auth};
 use crate::history::HistoryStore;
 use crate::registry::{IssueNodeRequest, NodeRegistry, issue_node};
 use crate::state::SharedState;
@@ -47,6 +49,10 @@ use crate::ws::ws_handler;
 const LOAD_TEST_TIMEOUT_SECS: u64 = 30;
 const LOAD_TEST_METRICS_PER_NODE: u64 = 12;
 const LOAD_TEST_OVERVIEW_PROBES: usize = 24;
+const LOAD_TEST_READ_PROBES: usize = 20;
+const LOAD_TEST_HISTORY_POINTS: usize = 360;
+const LOAD_TEST_STEADY_METRICS_PER_NODE: u64 = 18;
+const LOAD_TEST_STEADY_METRIC_DELAY_MS: u64 = 15;
 const LOAD_TEST_BASIC_AUTH: &str = "Basic dmlld2VyOnNlY3JldA==";
 
 #[derive(Debug, Clone)]
@@ -68,9 +74,37 @@ struct ScenarioResult {
     overview_max_ms: f64,
 }
 
+#[derive(Debug)]
+struct ApiScenarioResult {
+    nodes: usize,
+    steady_metrics_total: usize,
+    connect_ms: f64,
+    settle_ms: f64,
+    steady_metrics_per_sec: f64,
+    history_seed_points: usize,
+    overview: LatencySummary,
+    nodes_api: LatencySummary,
+    node_api: LatencySummary,
+    history_api: LatencySummary,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LatencySummary {
+    p50_ms: f64,
+    p95_ms: f64,
+    max_ms: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AgentWorkload {
+    metrics_per_node: u64,
+    inter_message_delay: Duration,
+}
+
 struct TestServer {
     addr: SocketAddr,
     shared: SharedState,
+    history: HistoryStore,
     shutdown_tx: Option<oneshot::Sender<()>>,
     server_handle: JoinHandle<Result<(), std::io::Error>>,
     temp_dir: PathBuf,
@@ -150,7 +184,7 @@ impl TestServer {
         history.initialize().await;
         let readiness = ServerReadiness::new(history.is_available());
         let state = AppState {
-            history,
+            history: history.clone(),
             install_admission: InstallAdmissionController::new(InstallAdmissionConfig {
                 auth_fail_window_secs: config.ws.auth_fail_window_secs,
                 auth_fail_max_attempts: config.ws.auth_fail_max_attempts,
@@ -175,6 +209,9 @@ impl TestServer {
         let shared = state.shared.clone();
         let protected_routes = Router::new()
             .route("/api/overview", get(overview))
+            .route("/api/nodes", get(nodes))
+            .route("/api/nodes/{node_id}", get(node_status))
+            .route("/api/nodes/{node_id}/history", get(node_history))
             .route_layer(from_fn_with_state(state.clone(), require_readonly_auth));
         let app = Router::new()
             .route("/ws", get(ws_handler))
@@ -198,6 +235,7 @@ impl TestServer {
             Self {
                 addr,
                 shared,
+                history,
                 shutdown_tx: Some(shutdown_tx),
                 server_handle,
                 temp_dir,
@@ -228,6 +266,14 @@ async fn load_test_scaling_scores() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "manual load test; run with -- --ignored --nocapture"]
+async fn load_test_api_surface_scores() {
+    if let Err(error) = run_api_surface_load_test().await {
+        panic!("{error:#}");
+    }
+}
+
 async fn run_scaling_load_test() -> Result<()> {
     let scenarios = [20_usize, 50, 100, 200];
     println!(
@@ -251,6 +297,42 @@ async fn run_scaling_load_test() -> Result<()> {
     Ok(())
 }
 
+async fn run_api_surface_load_test() -> Result<()> {
+    let scenarios = [20_usize, 50, 100, 200];
+    println!(
+        "API_LOAD_TEST starting scenarios={:?} steady_metrics_per_node={} read_probes={} history_seed_points={}",
+        scenarios,
+        LOAD_TEST_STEADY_METRICS_PER_NODE,
+        LOAD_TEST_READ_PROBES,
+        LOAD_TEST_HISTORY_POINTS,
+    );
+    for &node_count in &scenarios {
+        let result = run_api_surface_scenario(node_count).await?;
+        println!(
+            "API_RESULT nodes={} connect_ms={:.1} settle_ms={:.1} steady_metrics_total={} steady_metrics_per_sec={:.1} history_seed_points={} overview_p50_ms={:.2} overview_p95_ms={:.2} overview_max_ms={:.2} nodes_p50_ms={:.2} nodes_p95_ms={:.2} nodes_max_ms={:.2} node_p50_ms={:.2} node_p95_ms={:.2} node_max_ms={:.2} history_p50_ms={:.2} history_p95_ms={:.2} history_max_ms={:.2}",
+            result.nodes,
+            result.connect_ms,
+            result.settle_ms,
+            result.steady_metrics_total,
+            result.steady_metrics_per_sec,
+            result.history_seed_points,
+            result.overview.p50_ms,
+            result.overview.p95_ms,
+            result.overview.max_ms,
+            result.nodes_api.p50_ms,
+            result.nodes_api.p95_ms,
+            result.nodes_api.max_ms,
+            result.node_api.p50_ms,
+            result.node_api.p95_ms,
+            result.node_api.max_ms,
+            result.history_api.p50_ms,
+            result.history_api.p95_ms,
+            result.history_api.max_ms,
+        );
+    }
+    Ok(())
+}
+
 async fn run_single_scenario(node_count: usize) -> Result<ScenarioResult> {
     let (server, credentials) = TestServer::start(node_count).await?;
     let (ready_tx, mut ready_rx) = mpsc::unbounded_channel::<String>();
@@ -259,12 +341,16 @@ async fn run_single_scenario(node_count: usize) -> Result<ScenarioResult> {
     let mut handles = Vec::with_capacity(node_count);
     let expected_final_uptime = LOAD_TEST_METRICS_PER_NODE;
     let connect_started = Instant::now();
+    let workload = AgentWorkload {
+        metrics_per_node: LOAD_TEST_METRICS_PER_NODE,
+        inter_message_delay: Duration::ZERO,
+    };
 
     for credential in credentials.clone() {
         handles.push(tokio::spawn(run_fake_agent(
             server.addr,
             credential,
-            LOAD_TEST_METRICS_PER_NODE,
+            workload,
             ready_tx.clone(),
             burst_barrier.clone(),
             stop_rx.clone(),
@@ -316,7 +402,7 @@ async fn run_single_scenario(node_count: usize) -> Result<ScenarioResult> {
 
     let metrics_total = node_count * LOAD_TEST_METRICS_PER_NODE as usize;
     let settle_secs = settle_elapsed.as_secs_f64().max(0.001);
-    let (p50, p95, max) = summarize_latencies(&latencies)?;
+    let overview = summarize_latencies(&latencies)?;
 
     Ok(ScenarioResult {
         nodes: node_count,
@@ -324,16 +410,145 @@ async fn run_single_scenario(node_count: usize) -> Result<ScenarioResult> {
         connect_ms: connect_elapsed.as_secs_f64() * 1000.0,
         settle_ms: settle_elapsed.as_secs_f64() * 1000.0,
         metrics_per_sec: metrics_total as f64 / settle_secs,
-        overview_p50_ms: p50,
-        overview_p95_ms: p95,
-        overview_max_ms: max,
+        overview_p50_ms: overview.p50_ms,
+        overview_p95_ms: overview.p95_ms,
+        overview_max_ms: overview.max_ms,
+    })
+}
+
+async fn run_api_surface_scenario(node_count: usize) -> Result<ApiScenarioResult> {
+    let (server, credentials) = TestServer::start(node_count).await?;
+    let representative = credentials
+        .first()
+        .cloned()
+        .context("missing representative node credential")?;
+    seed_history_points(
+        server.history.clone(),
+        &representative,
+        LOAD_TEST_HISTORY_POINTS,
+    )
+    .await?;
+
+    let (ready_tx, mut ready_rx) = mpsc::unbounded_channel::<String>();
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let burst_barrier = Arc::new(Barrier::new(node_count + 1));
+    let mut handles = Vec::with_capacity(node_count);
+    let workload = AgentWorkload {
+        metrics_per_node: LOAD_TEST_STEADY_METRICS_PER_NODE,
+        inter_message_delay: Duration::from_millis(LOAD_TEST_STEADY_METRIC_DELAY_MS),
+    };
+    let expected_final_uptime = workload.metrics_per_node;
+    let connect_started = Instant::now();
+
+    for credential in credentials.clone() {
+        handles.push(tokio::spawn(run_fake_agent(
+            server.addr,
+            credential,
+            workload,
+            ready_tx.clone(),
+            burst_barrier.clone(),
+            stop_rx.clone(),
+        )));
+    }
+    drop(ready_tx);
+
+    let mut ready_nodes = HashSet::with_capacity(node_count);
+    while ready_nodes.len() < node_count {
+        let next = timeout(Duration::from_secs(LOAD_TEST_TIMEOUT_SECS), ready_rx.recv())
+            .await
+            .context("timed out waiting for fake agents to authenticate")?;
+        let Some(node_id) = next else {
+            bail!(
+                "fake agent ready channel closed early after {} / {} nodes",
+                ready_nodes.len(),
+                node_count
+            );
+        };
+        ready_nodes.insert(node_id);
+    }
+    let connect_elapsed = connect_started.elapsed();
+
+    let representative_node_id = representative.node_id.clone();
+    let overview_task = tokio::spawn(probe_overview_latencies(server.addr, LOAD_TEST_READ_PROBES));
+    let nodes_task = tokio::spawn(probe_nodes_latencies(
+        server.addr,
+        LOAD_TEST_READ_PROBES,
+        node_count,
+    ));
+    let node_task = tokio::spawn(probe_node_status_latencies(
+        server.addr,
+        representative_node_id.clone(),
+        LOAD_TEST_READ_PROBES,
+    ));
+    let history_task = tokio::spawn(probe_node_history_latencies(
+        server.addr,
+        representative_node_id,
+        LOAD_TEST_READ_PROBES,
+        LOAD_TEST_HISTORY_POINTS / 2,
+    ));
+
+    let settle_started = Instant::now();
+    burst_barrier.wait().await;
+    wait_for_final_snapshots(
+        server.shared.clone(),
+        &credentials,
+        expected_final_uptime,
+        Duration::from_secs(LOAD_TEST_TIMEOUT_SECS),
+    )
+    .await?;
+    let settle_elapsed = settle_started.elapsed();
+
+    let _ = stop_tx.send(true);
+    for handle in handles {
+        handle
+            .await
+            .map_err(|error| anyhow!("join fake agent task: {error}"))??;
+    }
+
+    let overview = summarize_latencies(
+        &overview_task
+            .await
+            .map_err(|error| anyhow!("join overview probe task: {error}"))??,
+    )?;
+    let nodes_api = summarize_latencies(
+        &nodes_task
+            .await
+            .map_err(|error| anyhow!("join nodes probe task: {error}"))??,
+    )?;
+    let node_api = summarize_latencies(
+        &node_task
+            .await
+            .map_err(|error| anyhow!("join node probe task: {error}"))??,
+    )?;
+    let history_api = summarize_latencies(
+        &history_task
+            .await
+            .map_err(|error| anyhow!("join history probe task: {error}"))??,
+    )?;
+
+    server.shutdown().await?;
+
+    let metrics_total = node_count * workload.metrics_per_node as usize;
+    let settle_secs = settle_elapsed.as_secs_f64().max(0.001);
+
+    Ok(ApiScenarioResult {
+        nodes: node_count,
+        steady_metrics_total: metrics_total,
+        connect_ms: connect_elapsed.as_secs_f64() * 1000.0,
+        settle_ms: settle_elapsed.as_secs_f64() * 1000.0,
+        steady_metrics_per_sec: metrics_total as f64 / settle_secs,
+        history_seed_points: LOAD_TEST_HISTORY_POINTS,
+        overview,
+        nodes_api,
+        node_api,
+        history_api,
     })
 }
 
 async fn run_fake_agent(
     addr: SocketAddr,
     credential: AgentCredential,
-    metrics_per_node: u64,
+    workload: AgentWorkload,
     ready_tx: mpsc::UnboundedSender<String>,
     burst_barrier: Arc<Barrier>,
     mut stop_rx: watch::Receiver<bool>,
@@ -354,11 +569,14 @@ async fn run_fake_agent(
         .map_err(|_| anyhow!("ready channel closed"))?;
 
     burst_barrier.wait().await;
-    for uptime_secs in 1..=metrics_per_node {
+    for uptime_secs in 1..=workload.metrics_per_node {
         let metrics = WireMessage::Metrics(MetricsMessage {
             snapshot: fake_snapshot(uptime_secs),
         });
         send_wire_message(&mut socket, &metrics).await?;
+        if !workload.inter_message_delay.is_zero() {
+            sleep(workload.inter_message_delay).await;
+        }
     }
 
     let _ = stop_rx.changed().await;
@@ -444,8 +662,12 @@ fn fake_identity(credential: &AgentCredential) -> NodeIdentity {
 }
 
 fn fake_snapshot(uptime_secs: u64) -> NodeSnapshot {
+    fake_snapshot_at(uptime_secs, Utc::now())
+}
+
+fn fake_snapshot_at(uptime_secs: u64, collected_at: chrono::DateTime<Utc>) -> NodeSnapshot {
     NodeSnapshot {
-        collected_at: Utc::now(),
+        collected_at,
         cpu_usage_percent: 12.5 + (uptime_secs % 7) as f64,
         load: LoadAverage {
             one: 0.3,
@@ -533,43 +755,169 @@ async fn wait_for_final_snapshots(
     }
 }
 
+async fn seed_history_points(
+    history: HistoryStore,
+    credential: &AgentCredential,
+    points: usize,
+) -> Result<()> {
+    let now = Utc::now();
+    let spacing_secs = ximonitor_proto::DEFAULT_HISTORY_WRITE_INTERVAL_SECS as i64;
+    let first_point_at = now - chrono::Duration::seconds((points as i64 - 1).max(0) * spacing_secs);
+    for index in 0..points {
+        let recorded_at = first_point_at + chrono::Duration::seconds(index as i64 * spacing_secs);
+        let status = NodeStatus {
+            identity: fake_identity(credential),
+            remote_ip: Some("127.0.0.1".to_string()),
+            snapshot: Some(fake_snapshot_at(index as u64 + 1, recorded_at)),
+            last_seen: Some(recorded_at),
+            latency_ms: Some(6 + (index as u64 % 17)),
+            online: true,
+        };
+        history.record_status(&status).await;
+    }
+    Ok(())
+}
+
 async fn probe_overview_latencies(addr: SocketAddr, samples: usize) -> Result<Vec<Duration>> {
     let mut latencies = Vec::with_capacity(samples);
     for _ in 0..samples {
-        latencies.push(fetch_overview_latency(addr).await?);
+        let (latency, body) = fetch_http_latency(addr, "/api/overview").await?;
+        validate_overview_body(&body)?;
+        latencies.push(latency);
         sleep(Duration::from_millis(25)).await;
     }
     Ok(latencies)
 }
 
-async fn fetch_overview_latency(addr: SocketAddr) -> Result<Duration> {
+async fn probe_nodes_latencies(
+    addr: SocketAddr,
+    samples: usize,
+    expected_nodes: usize,
+) -> Result<Vec<Duration>> {
+    let mut latencies = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        let (latency, body) = fetch_http_latency(addr, "/api/nodes").await?;
+        validate_nodes_body(&body, expected_nodes)?;
+        latencies.push(latency);
+        sleep(Duration::from_millis(20)).await;
+    }
+    Ok(latencies)
+}
+
+async fn probe_node_status_latencies(
+    addr: SocketAddr,
+    node_id: String,
+    samples: usize,
+) -> Result<Vec<Duration>> {
+    let mut latencies = Vec::with_capacity(samples);
+    let path = format!("/api/nodes/{node_id}");
+    for _ in 0..samples {
+        let (latency, body) = fetch_http_latency(addr, &path).await?;
+        validate_node_status_body(&body, &node_id)?;
+        latencies.push(latency);
+        sleep(Duration::from_millis(20)).await;
+    }
+    Ok(latencies)
+}
+
+async fn probe_node_history_latencies(
+    addr: SocketAddr,
+    node_id: String,
+    samples: usize,
+    min_points: usize,
+) -> Result<Vec<Duration>> {
+    let mut latencies = Vec::with_capacity(samples);
+    let path = format!("/api/nodes/{node_id}/history?window_hours=24&max_points=480");
+    for _ in 0..samples {
+        let (latency, body) = fetch_http_latency(addr, &path).await?;
+        validate_history_body(&body, &node_id, min_points)?;
+        latencies.push(latency);
+        sleep(Duration::from_millis(20)).await;
+    }
+    Ok(latencies)
+}
+
+async fn fetch_http_latency(addr: SocketAddr, path: &str) -> Result<(Duration, String)> {
     let started = Instant::now();
     let mut stream = TcpStream::connect(addr)
         .await
-        .with_context(|| format!("connect overview probe to {addr}"))?;
+        .with_context(|| format!("connect http probe to {addr}"))?;
     let request = format!(
-        "GET /api/overview HTTP/1.1\r\nHost: {addr}\r\nAuthorization: {LOAD_TEST_BASIC_AUTH}\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nAuthorization: {LOAD_TEST_BASIC_AUTH}\r\nConnection: close\r\n\r\n"
     );
     stream
         .write_all(request.as_bytes())
         .await
-        .context("write overview request")?;
+        .with_context(|| format!("write http request for {path}"))?;
 
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)
         .await
-        .context("read overview response")?;
+        .with_context(|| format!("read http response for {path}"))?;
 
     let response_text = String::from_utf8_lossy(&response);
     if !response_text.starts_with("HTTP/1.1 200") && !response_text.starts_with("HTTP/1.0 200") {
-        bail!("unexpected overview response: {response_text}");
+        bail!("unexpected http response for {path}: {response_text}");
     }
 
-    Ok(started.elapsed())
+    let Some((_, body)) = response_text.split_once("\r\n\r\n") else {
+        bail!("missing http body separator for {path}");
+    };
+
+    Ok((started.elapsed(), body.to_string()))
 }
 
-fn summarize_latencies(latencies: &[Duration]) -> Result<(f64, f64, f64)> {
+fn validate_overview_body(body: &str) -> Result<()> {
+    let overview: serde_json::Value = serde_json::from_str(body).context("decode overview body")?;
+    let total_nodes = overview
+        .get("total_nodes")
+        .and_then(serde_json::Value::as_u64)
+        .context("overview missing total_nodes")?;
+    if total_nodes == 0 {
+        bail!("overview returned zero nodes");
+    }
+    Ok(())
+}
+
+fn validate_nodes_body(body: &str, expected_nodes: usize) -> Result<()> {
+    let statuses: Vec<NodeStatus> = serde_json::from_str(body).context("decode nodes body")?;
+    if statuses.len() != expected_nodes {
+        bail!(
+            "nodes endpoint returned {} nodes, expected {expected_nodes}",
+            statuses.len()
+        );
+    }
+    Ok(())
+}
+
+fn validate_node_status_body(body: &str, node_id: &str) -> Result<()> {
+    let status: NodeStatus = serde_json::from_str(body).context("decode node status body")?;
+    if status.identity.node_id != node_id {
+        bail!(
+            "node status endpoint returned {} instead of {node_id}",
+            status.identity.node_id
+        );
+    }
+    Ok(())
+}
+
+fn validate_history_body(body: &str, node_id: &str, min_points: usize) -> Result<()> {
+    let points: Vec<ximonitor_proto::HistoryPoint> =
+        serde_json::from_str(body).context("decode node history body")?;
+    if points.len() < min_points {
+        bail!(
+            "history endpoint returned only {} points for {node_id}, expected at least {min_points}",
+            points.len()
+        );
+    }
+    if points.iter().any(|point| point.node_id != node_id) {
+        bail!("history endpoint mixed node ids for {node_id}");
+    }
+    Ok(())
+}
+
+fn summarize_latencies(latencies: &[Duration]) -> Result<LatencySummary> {
     if latencies.is_empty() {
         bail!("no overview latencies captured");
     }
@@ -584,9 +932,9 @@ fn summarize_latencies(latencies: &[Duration]) -> Result<(f64, f64, f64)> {
         values[index]
     };
 
-    Ok((
-        percentile(0.50),
-        percentile(0.95),
-        *values.last().unwrap_or(&0.0),
-    ))
+    Ok(LatencySummary {
+        p50_ms: percentile(0.50),
+        p95_ms: percentile(0.95),
+        max_ms: *values.last().unwrap_or(&0.0),
+    })
 }
