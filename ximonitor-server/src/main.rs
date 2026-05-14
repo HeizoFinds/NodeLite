@@ -24,7 +24,7 @@ mod ui;
 mod ws;
 
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -48,7 +48,7 @@ use crate::cli::{Cli, Command, install_agent_command, issue_node_command, upgrad
 use crate::handlers::{
     bootstrap, healthz, index, install_agent_script, install_bootstrap, logout_and_reauth,
     node_detail, node_history, node_status, nodes, overview, readyz, require_readonly_auth,
-    ui_i18n_asset, verify_2fa_api, verify_2fa_page,
+    settings, ui_i18n_asset, verify_2fa_api, verify_2fa_page,
 };
 use crate::history::HistoryStore;
 use crate::registry::NodeRegistry;
@@ -70,6 +70,7 @@ pub(crate) struct AppState {
     pub(crate) ws_admission: WsAdmissionController,
     pub(crate) readonly_auth: ReadonlyRouteAuth,
     pub(crate) two_factor_sessions: TwoFactorSessions,
+    pub(crate) config_path: Arc<PathBuf>,
 }
 
 /// 只跟踪"对外是否可服务"所需的几个关键依赖状态。
@@ -197,6 +198,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
         ws_admission: WsAdmissionController::new(&config.ws),
         readonly_auth: readonly_route_auth.clone(),
         two_factor_sessions: TwoFactorSessions::new(),
+        config_path: Arc::new(config_path.to_path_buf()),
     };
     let shared_for_shutdown = state.shared.clone();
     let snapshot_path = config.snapshot_path.clone();
@@ -209,6 +211,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
         .route("/api/nodes", get(nodes))
         .route("/api/nodes/{node_id}", get(node_status))
         .route("/api/nodes/{node_id}/history", get(node_history))
+        .route("/api/settings", get(settings))
         .route_layer(from_fn_with_state(state.clone(), require_readonly_auth));
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -579,6 +582,7 @@ mod tests {
             }),
             readonly_auth: ReadonlyRouteAuth::from_config(None),
             two_factor_sessions: TwoFactorSessions::new(),
+            config_path: Arc::new(PathBuf::from("config/server.toml")),
         };
 
         let _app: Router = Router::new()
@@ -806,6 +810,7 @@ mod tests {
                 }),
                 readonly_auth: ReadonlyRouteAuth::from_config(None),
                 two_factor_sessions: TwoFactorSessions::new(),
+                config_path: Arc::new(temp_dir.join("server.toml")),
             };
             let request = Request::builder()
                 .uri("/install/bootstrap")

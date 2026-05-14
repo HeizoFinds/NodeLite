@@ -5,7 +5,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{AppendHeaders, Html, IntoResponse, Response};
 use axum::{Json, extract::Request};
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
@@ -18,6 +18,7 @@ use crate::auth::{
 };
 use crate::registry::render_agent_config;
 use crate::ui::{UI_I18N_JSON, index_html, node_html};
+use ximonitor_proto::DEFAULT_HISTORY_RETENTION_HOURS;
 
 /// 把 `scripts/install-agent.sh` 在编译期嵌入到二进制内。
 const INSTALL_AGENT_SCRIPT: &str = include_str!("../../scripts/install-agent.sh");
@@ -38,6 +39,54 @@ struct BootstrapResponse {
     public_base_url: String,
     refresh_interval_secs: u64,
     registered_nodes: usize,
+}
+
+/// 设置页读取的服务端与安全状态。这里刻意不包含任何 token / password 明文。
+#[derive(Debug, Serialize)]
+pub(crate) struct SettingsResponse {
+    service: &'static str,
+    server_version: &'static str,
+    repository: &'static str,
+    public_base_url: String,
+    listen: String,
+    config_path: String,
+    registry_path: String,
+    history_db_path: String,
+    snapshot_path: String,
+    history_retention_hours: u64,
+    refresh_interval_secs: u64,
+    auth: SettingsAuth,
+    updates: SettingsUpdates,
+    agents: Vec<SettingsAgentToken>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SettingsAuth {
+    enabled: bool,
+    username: Option<String>,
+    two_factor_enabled: bool,
+    totp_secret_configured: bool,
+    session_ttl_secs: u64,
+    pending_ttl_secs: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SettingsUpdates {
+    latest_release_url: String,
+    server_upgrade_command: String,
+    agent_upgrade_command: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SettingsAgentToken {
+    node_id: String,
+    node_label: String,
+    online: bool,
+    agent_version: Option<String>,
+    remote_ip: Option<String>,
+    tags: Vec<String>,
+    token_expires_at: Option<DateTime<Utc>>,
+    token_expires_in_secs: Option<i64>,
 }
 
 /// 历史接口查询参数。默认查询最近 24 小时,也可用 start/end 指定 unix 秒级区间。
@@ -297,6 +346,73 @@ pub(crate) async fn bootstrap(State(state): State<AppState>) -> impl IntoRespons
         refresh_interval_secs: state.shared.config().refresh_interval_secs,
         registered_nodes: state.registry.count().await,
     })
+}
+
+/// 设置页数据接口:只返回运行状态与安全元信息,不泄露任何凭证本体。
+pub(crate) async fn settings(State(state): State<AppState>) -> impl IntoResponse {
+    let config = state.shared.config();
+    let statuses = state.shared.list_statuses().await;
+    let status_by_id = statuses
+        .into_iter()
+        .map(|status| (status.identity.node_id.clone(), status))
+        .collect::<std::collections::HashMap<_, _>>();
+    let now = Utc::now();
+    let agents = state
+        .registry
+        .list_registered_nodes()
+        .await
+        .into_iter()
+        .map(|node| {
+            let status = status_by_id.get(&node.node_id);
+            SettingsAgentToken {
+                node_id: node.node_id,
+                node_label: node.node_label,
+                online: status.is_some_and(|status| status.online),
+                agent_version: status.map(|status| status.identity.agent_version.clone()),
+                remote_ip: status.and_then(|status| status.remote_ip.clone()),
+                tags: node.tags,
+                token_expires_at: node.token_expires_at,
+                token_expires_in_secs: node
+                    .token_expires_at
+                    .map(|expires_at| (expires_at - now).num_seconds()),
+            }
+        })
+        .collect();
+    let auth = config.readonly_auth.as_ref();
+    Json(SettingsResponse {
+        service: "ximonitor-server",
+        server_version: server_build_version(),
+        repository: env!("CARGO_PKG_REPOSITORY"),
+        public_base_url: config.public_base_url.clone(),
+        listen: config.listen.to_string(),
+        config_path: state.config_path.display().to_string(),
+        registry_path: config.node_registry_path.display().to_string(),
+        history_db_path: config.history_db_path.display().to_string(),
+        snapshot_path: config.snapshot_path.display().to_string(),
+        history_retention_hours: DEFAULT_HISTORY_RETENTION_HOURS,
+        refresh_interval_secs: config.refresh_interval_secs,
+        auth: SettingsAuth {
+            enabled: auth.is_some(),
+            username: auth.map(|auth| auth.username.clone()),
+            two_factor_enabled: auth.is_some_and(|auth| auth.enable_2fa),
+            totp_secret_configured: auth.and_then(|auth| auth.totp_secret.as_ref()).is_some(),
+            session_ttl_secs: TWO_FACTOR_AUTH_SECS,
+            pending_ttl_secs: TWO_FACTOR_PENDING_SECS,
+        },
+        updates: SettingsUpdates {
+            latest_release_url: format!("{}/releases/latest", env!("CARGO_PKG_REPOSITORY")),
+            server_upgrade_command: "curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/install-server.sh | sudo XIMONITOR_SERVER_MODE=upgrade sh".to_string(),
+            agent_upgrade_command: format!(
+                "{} upgrade-agent",
+                std::env::args().next().unwrap_or_else(|| "ximonitor-server".to_string())
+            ),
+        },
+        agents,
+    })
+}
+
+fn server_build_version() -> &'static str {
+    option_env!("XIMONITOR_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
 /// 暴露内置安装脚本,供 `curl | sh` 模式安装 Agent 时下载。
