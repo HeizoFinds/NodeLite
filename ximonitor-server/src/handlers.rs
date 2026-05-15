@@ -23,7 +23,10 @@ use crate::auth::{
     verify_totp_step,
 };
 use crate::qr::qr_svg_for_text;
-use crate::registry::render_agent_config;
+use crate::registry::{
+    IssueNodeRequest, default_agent_release_base_url, issue_node, render_agent_config,
+    render_install_command, render_upgrade_command,
+};
 use crate::ui::{UI_I18N_JSON, index_html, node_html};
 use ximonitor_proto::{DEFAULT_HISTORY_RETENTION_HOURS, ReadonlyAuthConfig, parse_server_config};
 
@@ -146,6 +149,17 @@ pub(crate) struct DisableTwoFactorRequest {
 pub(crate) struct SettingsActionResponse {
     ok: bool,
     message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct NodeTokenRotationResponse {
+    ok: bool,
+    message: String,
+    token_expires_at: Option<DateTime<Utc>>,
+    token_expires_in_secs: Option<i64>,
+    install_token_expires_at: DateTime<Utc>,
+    install_command: String,
+    agent_upgrade_command: String,
 }
 
 /// 历史接口查询参数。默认查询最近 24 小时,也可用 start/end 指定 unix 秒级区间。
@@ -603,6 +617,125 @@ pub(crate) async fn start_server_update(
             )
         }
     }
+}
+
+/// 节点级敏感操作:轮换指定 Agent 的持久化 token,并立即生成一条新的重装命令。
+///
+/// 这是一个显式运维动作。轮换后旧 token 会失效,现有 Agent 会在后续心跳 / 指标
+/// 上报时被服务端踢下线;调用方应尽快用返回的新安装命令在目标主机重装或更新配置。
+pub(crate) async fn rotate_node_token(
+    State(state): State<AppState>,
+    AxumPath(node_id): AxumPath<String>,
+    Json(request): Json<StartServerUpdateRequest>,
+) -> Response {
+    let current_auth = {
+        let auth = state.readonly_auth.read().await;
+        auth.config.clone()
+    };
+    let Some(current_auth) = current_auth else {
+        return settings_json_error(StatusCode::CONFLICT, "readonly auth is not enabled");
+    };
+    if let Some(response) = settings_confirmation_error_for_sensitive_action(
+        &state,
+        &current_auth,
+        request.current_password.as_deref(),
+        request.code.as_deref(),
+    ) {
+        return response;
+    }
+
+    let Some(node) = state
+        .registry
+        .list_registered_nodes()
+        .await
+        .into_iter()
+        .find(|node| node.node_id == node_id)
+    else {
+        return settings_json_error(StatusCode::NOT_FOUND, "node not found");
+    };
+
+    let release_base_url = match default_agent_release_base_url() {
+        Ok(url) => url,
+        Err(error) => {
+            error!(error = ?error, "failed to resolve default agent release base url");
+            return settings_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to resolve agent release source",
+            );
+        }
+    };
+
+    let issue_result = match issue_node(
+        state.registry.path(),
+        IssueNodeRequest {
+            node_id: node.node_id.clone(),
+            node_label: Some(node.node_label.clone()),
+            tags: node.tags.clone(),
+            rotate_token: true,
+        },
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            error!(error = ?error, node_id = %node.node_id, "failed to rotate agent token");
+            return settings_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to rotate agent token",
+            );
+        }
+    };
+
+    if let Err(error) = state.registry.reload().await {
+        error!(error = ?error, node_id = %node.node_id, "failed to reload registry after token rotation");
+    }
+
+    let install_command = match render_install_command(
+        &state.shared.config().public_base_url,
+        &issue_result.install_token,
+        &release_base_url,
+    ) {
+        Ok(command) => command,
+        Err(error) => {
+            error!(error = ?error, node_id = %node.node_id, "failed to render node install command after token rotation");
+            return settings_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to render node install command",
+            );
+        }
+    };
+    let agent_upgrade_command = match render_upgrade_command(
+        &state.shared.config().public_base_url,
+        &release_base_url,
+    ) {
+        Ok(command) => command,
+        Err(error) => {
+            error!(error = ?error, node_id = %node.node_id, "failed to render agent upgrade command");
+            return settings_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to render agent upgrade command",
+            );
+        }
+    };
+    let now = Utc::now();
+
+    (
+        StatusCode::OK,
+        Json(NodeTokenRotationResponse {
+            ok: true,
+            message: "agent token rotated; redeploy the node with the new install command"
+                .to_string(),
+            token_expires_at: issue_result.node.token_expires_at,
+            token_expires_in_secs: issue_result
+                .node
+                .token_expires_at
+                .map(|expires_at| (expires_at - now).num_seconds()),
+            install_token_expires_at: issue_result.install_token_expires_at,
+            install_command,
+            agent_upgrade_command,
+        }),
+    )
+        .into_response()
 }
 
 pub(crate) async fn server_update_log(

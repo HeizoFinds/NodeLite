@@ -632,6 +632,151 @@
         color: var(--text-muted);
       }
       .placeholder svg { margin-bottom: 12px; opacity: 0.6; }
+      .settings-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .settings-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-soft);
+        border-radius: 18px;
+        padding: 18px;
+        display: grid;
+        gap: 14px;
+      }
+      .settings-card.full { grid-column: 1 / -1; }
+      .settings-card h3 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .settings-kv {
+        display: grid;
+        gap: 10px;
+      }
+      .settings-kv div {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+      }
+      .settings-kv span:first-child {
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+      .settings-kv span:last-child {
+        color: var(--text-primary);
+        text-align: right;
+        font-size: 13px;
+        word-break: break-word;
+      }
+      .settings-note {
+        margin: 0;
+        color: var(--text-muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .settings-form {
+        display: grid;
+        gap: 12px;
+      }
+      .settings-form label {
+        display: grid;
+        gap: 8px;
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+      .settings-input {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid var(--border-soft);
+        background: var(--bg-panel);
+        color: var(--text-primary);
+        padding: 11px 12px;
+        font-size: 13px;
+        outline: none;
+      }
+      .settings-input:focus {
+        border-color: rgba(59,130,246,0.38);
+        box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+      }
+      .settings-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+      .settings-button {
+        border: 1px solid var(--border-soft);
+        background: var(--bg-card-soft);
+        color: var(--text-secondary);
+        border-radius: 12px;
+        padding: 10px 14px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .settings-button:hover {
+        color: var(--text-primary);
+        border-color: var(--border-strong);
+      }
+      .settings-button.primary {
+        border-color: rgba(59,130,246,0.35);
+        background: var(--accent-blue-soft);
+        color: var(--accent-blue);
+      }
+      .settings-button.danger {
+        border-color: rgba(239,68,68,0.35);
+        background: var(--accent-red-soft);
+        color: var(--accent-red);
+      }
+      .settings-message {
+        min-height: 18px;
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+      .settings-message.ok { color: var(--accent-green); }
+      .settings-message.error { color: var(--accent-red); }
+      .settings-code {
+        margin: 0;
+        border-radius: 14px;
+        border: 1px solid var(--border-soft);
+        background: var(--bg-panel);
+        color: var(--text-secondary);
+        padding: 14px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+      .settings-callout {
+        border-radius: 14px;
+        border: 1px solid var(--border-soft);
+        background: var(--bg-panel);
+        padding: 14px;
+        display: grid;
+        gap: 10px;
+      }
+      .settings-callout.ok {
+        border-color: rgba(34,197,94,0.22);
+        background: rgba(34,197,94,0.08);
+      }
+      .settings-inline-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .settings-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: var(--bg-card-soft);
+        color: var(--text-secondary);
+        font-size: 12px;
+        border: 1px solid var(--border-soft);
+      }
 
       @media (max-width: 1280px) {
         .layout-overview { grid-template-columns: minmax(280px, 1fr) repeat(2, minmax(0, 1fr)); }
@@ -641,6 +786,7 @@
         .layout-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .info-card { grid-row: span 2; grid-column: span 2; }
         .charts-grid { grid-template-columns: 1fr; }
+        .settings-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 720px) {
         .app { grid-template-columns: 1fr; }
@@ -930,12 +1076,8 @@
         </section>
 
         <section class="tab-pane" data-pane="settings" hidden>
-          <div class="placeholder">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19 12a7 7 0 0 0-.2-1.7l2-1.5-2-3.5-2.4 1a7 7 0 0 0-3-1.7L13 2h-2l-.4 2.6a7 7 0 0 0-3 1.7l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .6.1 1.2.2 1.7l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 3 1.7l.4 2.6h2l.4-2.6a7 7 0 0 0 3-1.7l2.4 1 2-3.5-2-1.5c.1-.5.2-1.1.2-1.7z" />
-            </svg>
-            <div data-i18n="node.placeholder.tab">This view is not available in the read-only dashboard.</div>
+          <div id="node-settings-root" class="settings-grid">
+            <div class="placeholder" data-i18n="settings.loading">Loading settings…</div>
           </div>
         </section>
       </main>
@@ -967,6 +1109,9 @@
       let latestNode = null;
       let overviewHistory = [];
       let latestHistory = [];
+      let latestSettings = null;
+      let latestNodeTokenRotation = null;
+      let nodeSettingsNotice = null;
       let refreshTimer = null;
       let activeBrushDrag = null;
       let detailRequestVersion = 0;
@@ -1106,11 +1251,32 @@
       function fmtDateTime(value) {
         return new Date(value).toLocaleString(currentLanguage);
       }
+      function fmtDurationSeconds(seconds) {
+        if (seconds == null) return t("settings.token.no_expiry");
+        const value = Number(seconds);
+        if (!Number.isFinite(value)) return t("common.not_available");
+        if (value <= 0) return t("settings.token.expired");
+        const days = Math.floor(value / 86400);
+        const hours = Math.floor((value % 86400) / 3600);
+        if (days > 0) return t("settings.duration.days_hours", { days, hours });
+        const minutes = Math.max(1, Math.floor(value / 60));
+        return t("settings.duration.minutes", { minutes });
+      }
       function fetchJson(url) {
         return fetch(url, { headers: { accept: "application/json" } }).then((response) => {
           if (!response.ok) throw new Error(`${url} -> ${response.status}`);
           return response.json();
         });
+      }
+      async function postSettingsJson(url, payload) {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify(payload || {}),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.message || `${response.status}`);
+        return body;
       }
       function normalizeHistory(history) {
         if (!Array.isArray(history)) return [];
@@ -1153,6 +1319,10 @@
         }
         if (name === "network") {
           renderOverviewCharts(displayedHistory());
+        }
+        if (name === "settings") {
+          if (latestSettings) renderNodeSettings();
+          else void refreshNodeSettings();
         }
       }
 
@@ -1317,6 +1487,155 @@
           seen.add(key);
           return true;
         });
+      }
+
+      // ---------------- Rendering: Settings tab ----------------
+      function currentNodeSettingsEntry() {
+        const agents = latestSettings?.agents;
+        if (!Array.isArray(agents)) return null;
+        return agents.find((agent) => agent.node_id === NODE_ID) || null;
+      }
+      function settingsKv(label, value) {
+        return `<div><span>${escapeHtml(label)}</span><span>${escapeHtml(value ?? t("common.not_available"))}</span></div>`;
+      }
+      function nodeRotateConfirmationField(auth) {
+        if (auth?.two_factor_enabled) {
+          return `<label>${escapeHtml(t("settings.security.verification_code"))}<input class="settings-input" type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required></label>`;
+        }
+        return `<label>${escapeHtml(t("settings.password.current"))}<input class="settings-input" type="password" name="current_password" autocomplete="current-password" required></label>`;
+      }
+      function nodeSettingsNoticeHtml() {
+        if (!nodeSettingsNotice?.text) return `<div class="settings-message"></div>`;
+        const cls = nodeSettingsNotice.kind === "error" ? "error" : nodeSettingsNotice.kind === "ok" ? "ok" : "";
+        return `<div class="settings-message ${cls}">${escapeHtml(nodeSettingsNotice.text)}</div>`;
+      }
+      function renderNodeSettings() {
+        const root = document.getElementById("node-settings-root");
+        if (!root) return;
+        if (!latestSettings) {
+          root.innerHTML = `<div class="placeholder">${escapeHtml(t("settings.loading"))}</div>`;
+          return;
+        }
+
+        const auth = latestSettings.auth || {};
+        const settingsNode = currentNodeSettingsEntry();
+        const node = latestNode;
+        const status = node ? statusLabel(nodeStatusKey(node)) : (settingsNode?.online ? t("common.online") : t("common.offline"));
+        const agentVersion = node?.identity?.agent_version || settingsNode?.agent_version || t("common.not_available");
+        const remoteIp = node?.remote_ip || settingsNode?.remote_ip || t("common.not_available");
+        const tags = Array.isArray(settingsNode?.tags) && settingsNode.tags.length
+          ? settingsNode.tags
+          : Array.isArray(node?.identity?.tags) && node.identity.tags.length
+            ? node.identity.tags
+            : [];
+        const tokenExpiresAt = settingsNode?.token_expires_at
+          ? fmtDateTime(settingsNode.token_expires_at)
+          : t("settings.token.no_expiry");
+        const tokenRemaining = fmtDurationSeconds(settingsNode?.token_expires_in_secs);
+        const upgradeCommand = latestNodeTokenRotation?.agent_upgrade_command || latestSettings?.updates?.agent_upgrade_command || t("common.not_available");
+        const rotation = latestNodeTokenRotation;
+
+        if (!settingsNode) {
+          root.innerHTML = `
+            <article class="settings-card full">
+              <h3>${escapeHtml(t("node.settings.title"))}</h3>
+              <div class="placeholder" style="padding:24px">${escapeHtml(t("node.settings.empty"))}</div>
+            </article>
+          `;
+          return;
+        }
+
+        root.innerHTML = `
+          <article class="settings-card">
+            <h3>${escapeHtml(t("node.settings.agent.title"))}</h3>
+            <div class="settings-kv">
+              ${settingsKv(t("settings.tokens.node"), settingsNode.node_label || settingsNode.node_id)}
+              ${settingsKv(t("node.settings.agent.node_id"), settingsNode.node_id)}
+              ${settingsKv(t("settings.tokens.status"), status)}
+              ${settingsKv(t("node.settings.agent.version"), agentVersion)}
+              ${settingsKv(t("settings.tokens.ip"), remoteIp)}
+              ${settingsKv(t("settings.tokens.expires_at"), tokenExpiresAt)}
+              ${settingsKv(t("settings.tokens.remaining"), tokenRemaining)}
+            </div>
+            <div class="settings-inline-list">
+              ${(tags.length ? tags : [t("common.not_available")]).map((tag) => `<span class="settings-pill">${escapeHtml(tag)}</span>`).join("")}
+            </div>
+          </article>
+
+          <article class="settings-card">
+            <h3>${escapeHtml(t("node.settings.upgrade.title"))}</h3>
+            <p class="settings-note">${escapeHtml(t("node.settings.upgrade.note"))}</p>
+            <pre class="settings-code">${escapeHtml(upgradeCommand)}</pre>
+          </article>
+
+          <article class="settings-card full">
+            <h3>${escapeHtml(t("node.settings.rotate.title"))}</h3>
+            <p class="settings-note">${escapeHtml(t(auth.two_factor_enabled ? "node.settings.rotate.note_2fa" : "node.settings.rotate.note_password"))}</p>
+            <p class="settings-note">${escapeHtml(t("node.settings.rotate.disruptive_note"))}</p>
+            ${auth.enabled ? `
+              <form class="settings-form" id="node-token-rotate-form">
+                ${nodeRotateConfirmationField(auth)}
+                <div class="settings-actions">
+                  <button type="submit" class="settings-button danger">${escapeHtml(t("node.settings.rotate.submit"))}</button>
+                </div>
+              </form>
+            ` : `<div class="settings-note">${escapeHtml(t("node.settings.rotate.unavailable"))}</div>`}
+            ${nodeSettingsNoticeHtml()}
+          </article>
+
+          ${rotation ? `
+            <article class="settings-card full">
+              <h3>${escapeHtml(t("node.settings.rotate.install_title"))}</h3>
+              <div class="settings-callout ok">
+                <div class="settings-kv">
+                  ${settingsKv(t("settings.tokens.expires_at"), rotation.token_expires_at ? fmtDateTime(rotation.token_expires_at) : t("settings.token.no_expiry"))}
+                  ${settingsKv(t("settings.tokens.remaining"), fmtDurationSeconds(rotation.token_expires_in_secs))}
+                  ${settingsKv(t("node.settings.rotate.install_expires"), fmtDateTime(rotation.install_token_expires_at))}
+                </div>
+                <p class="settings-note">${escapeHtml(t("node.settings.rotate.install_note"))}</p>
+                <pre class="settings-code">${escapeHtml(rotation.install_command)}</pre>
+              </div>
+            </article>
+          ` : ""}
+        `;
+        document.getElementById("node-token-rotate-form")?.addEventListener("submit", submitNodeTokenRotation);
+      }
+      async function refreshNodeSettings() {
+        const root = document.getElementById("node-settings-root");
+        if (root) {
+          root.innerHTML = `<div class="placeholder">${escapeHtml(t("settings.loading"))}</div>`;
+        }
+        try {
+          latestSettings = await fetchJson("/api/settings");
+          renderNodeSettings();
+        } catch (error) {
+          latestSettings = null;
+          if (root) {
+            root.innerHTML = `<div class="placeholder">${escapeHtml(t("node.settings.load_failed", { error: error.message }))}</div>`;
+          }
+        }
+      }
+      async function submitNodeTokenRotation(event) {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const auth = latestSettings?.auth || {};
+        const payload = auth.two_factor_enabled
+          ? { code: form.code.value }
+          : { current_password: form.current_password.value };
+        nodeSettingsNotice = { kind: "", text: t("node.settings.rotate.submitting") };
+        renderNodeSettings();
+        try {
+          latestNodeTokenRotation = await postSettingsJson(`/api/nodes/${encodeURIComponent(NODE_ID)}/rotate-token`, payload);
+          nodeSettingsNotice = { kind: "ok", text: latestNodeTokenRotation.message || t("node.settings.rotate.success") };
+          try {
+            latestSettings = await fetchJson("/api/settings");
+          } catch (reloadError) {
+            console.warn("failed to reload settings after token rotation", reloadError);
+          }
+        } catch (error) {
+          nodeSettingsNotice = { kind: "error", text: t("node.settings.rotate.failed", { error: error.message }) };
+        }
+        renderNodeSettings();
       }
 
       // ---------------- Chart drawing ----------------
@@ -2108,7 +2427,10 @@
         await loadI18n();
         applyTheme(loadStoredTheme() || "dark");
         bindThemeToggle();
-        bindLanguageSelector(() => { rerenderNode(); });
+        bindLanguageSelector(() => {
+          rerenderNode();
+          if (latestSettings) renderNodeSettings();
+        });
         bindTabs();
         bindControls();
         setActiveTab(loadStoredTab() || "overview", { persist: false });
