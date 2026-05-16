@@ -1,4 +1,4 @@
-# Server 配置示例。完整字段说明见 ximonitor-proto/src/config.rs 中的 ServerConfig。
+# Server 配置示例。完整字段说明见 nodelite-proto/src/config.rs 中的 ServerConfig。
 
 [server]
 # 进程监听地址。生产部署通常监听 127.0.0.1,由前置 Nginx / Caddy 终止 TLS。

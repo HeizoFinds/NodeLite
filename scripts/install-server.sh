@@ -1,5 +1,5 @@
 #!/bin/sh
-# XiMonitor Server 一键安装 / 升级 / 迁移脚本。
+# NodeLite Server 一键安装 / 升级 / 迁移脚本。
 #
 # 主要流程:
 #   1. 解析参数与环境变量,确定模式(install / upgrade / migrate / auto)。
@@ -13,13 +13,13 @@ set -eu
 # 默认 umask:确保临时文件不会泄漏给同主机其它用户。
 umask 077
 
-BASE_URL="${XIMONITOR_SERVER_BASE_URL:-https://github.com/XiNian-dada/XiMonitor/releases/latest/download}"
-INSTALL_ROOT_DEFAULT="/opt/ximonitor"
+BASE_URL="${NODELITE_SERVER_BASE_URL:-https://github.com/XiNian-dada/NodeLite/releases/latest/download}"
+INSTALL_ROOT_DEFAULT="/opt/nodelite"
 LISTEN_HOST_DEFAULT="127.0.0.1"
-SERVICE_NAME="ximonitor-server"
-BIN_PATH="/usr/local/bin/ximonitor-server"
+SERVICE_NAME="nodelite-server"
+BIN_PATH="/usr/local/bin/nodelite-server"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
-MODE="${XIMONITOR_SERVER_MODE:-auto}"
+MODE="${NODELITE_SERVER_MODE:-auto}"
 
 TMP_BIN=""
 TMP_SHA256=""
@@ -425,8 +425,8 @@ need_cmd uname
 
 clear_screen
 
-tty_println "XiMonitor Server Installer"
-tty_println "This script installs the latest XiMonitor server release from GitHub."
+tty_println "NodeLite Server Installer"
+tty_println "This script installs the latest NodeLite server release from GitHub."
 tty_println ""
 
 validate_mode "$MODE"
@@ -451,10 +451,10 @@ fi
 
 if [ "$MODE" = "upgrade" ] || [ "$MODE" = "migrate" ]; then
   if [ "$existing_install" -ne 1 ]; then
-    fail "$MODE mode requires an existing XiMonitor server installation"
+    fail "$MODE mode requires an existing NodeLite server installation"
   fi
   if [ -z "$existing_install_root" ]; then
-    fail "failed to detect the current XiMonitor install root from the systemd unit"
+    fail "failed to detect the current NodeLite install root from the systemd unit"
   fi
 fi
 
@@ -502,7 +502,7 @@ CONFIG_PATH="$CONFIG_DIR/server.toml"
 REGISTRY_PATH="$CONFIG_DIR/server.json"
 
 if [ "$MODE" = "install" ] && [ "$existing_install" -eq 1 ]; then
-  if ! confirm_default_no "Existing XiMonitor files detected. Overwrite them?"; then
+  if ! confirm_default_no "Existing NodeLite files detected. Overwrite them?"; then
     fail "aborted by user"
   fi
 fi
@@ -536,7 +536,7 @@ case "$ARCH" in
     ;;
 esac
 
-ARTIFACT_NAME="ximonitor-server-$TARGET"
+ARTIFACT_NAME="nodelite-server-$TARGET"
 resolve_release_base_url
 DOWNLOAD_URL="$BASE_URL/$ARTIFACT_NAME"
 
@@ -545,8 +545,8 @@ chown root:root "$INSTALL_ROOT" "$CONFIG_DIR" "$DATA_DIR"
 chmod 0755 "$INSTALL_ROOT"
 chmod 0700 "$CONFIG_DIR" "$DATA_DIR"
 
-TMP_BIN="$(mktemp "$INSTALL_ROOT/ximonitor-server.XXXXXX")"
-TMP_SHA256="$(mktemp "$INSTALL_ROOT/ximonitor-sha256.XXXXXX")"
+TMP_BIN="$(mktemp "$INSTALL_ROOT/nodelite-server.XXXXXX")"
+TMP_SHA256="$(mktemp "$INSTALL_ROOT/nodelite-sha256.XXXXXX")"
 
 EXPECTED_SHA256="$(fetch_expected_sha256 "$ARTIFACT_NAME")"
 
@@ -576,7 +576,7 @@ fi
 
 cat >"$UNIT_PATH" <<EOF
 [Unit]
-Description=XiMonitor Server
+Description=NodeLite Server
 After=network-online.target
 Wants=network-online.target
 
@@ -618,11 +618,11 @@ systemctl restart "$SERVICE_NAME.service"
 
 clear_screen
 if [ "$MODE" = "upgrade" ]; then
-  tty_println "XiMonitor server upgraded and restarted."
+  tty_println "NodeLite server upgraded and restarted."
 elif [ "$MODE" = "migrate" ]; then
-  tty_println "XiMonitor server migrated, upgraded, and restarted."
+  tty_println "NodeLite server migrated, upgraded, and restarted."
 else
-  tty_println "XiMonitor server installed and started."
+  tty_println "NodeLite server installed and started."
 fi
 tty_println "Binary: $BIN_PATH"
 tty_println "Config: $CONFIG_PATH"

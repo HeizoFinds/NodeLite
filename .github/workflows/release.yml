@@ -89,22 +89,22 @@ jobs:
           fi
 
       - name: Build release binaries
-        # 通过 XIMONITOR_BUILD_VERSION 把 tag 注入二进制,便于运行时打印版本号。
+        # 通过 NODELITE_BUILD_VERSION 把 tag 注入二进制,便于运行时打印版本号。
         run: |
-          XIMONITOR_BUILD_VERSION="${RELEASE_TAG#v}" \
+          NODELITE_BUILD_VERSION="${RELEASE_TAG#v}" \
           cross build --locked --release --target "${{ matrix.target }}" \
-            -p ximonitor-server \
-            -p ximonitor-agent
+            -p nodelite-server \
+            -p nodelite-agent
 
       - name: Collect release assets
         # 把构建产物拷贝到 dist/ 并生成对应的 SHA256 校验文件。
         run: |
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/ximonitor-server" "dist/ximonitor-server-${{ matrix.target }}"
-          cp "target/${{ matrix.target }}/release/ximonitor-agent" "dist/ximonitor-agent-${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/nodelite-server" "dist/nodelite-server-${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/nodelite-agent" "dist/nodelite-agent-${{ matrix.target }}"
           sha256sum \
-            "dist/ximonitor-server-${{ matrix.target }}" \
-            "dist/ximonitor-agent-${{ matrix.target }}" \
+            "dist/nodelite-server-${{ matrix.target }}" \
+            "dist/nodelite-agent-${{ matrix.target }}" \
             > "dist/SHA256SUMS-${{ matrix.target }}.txt"
 
       - name: Upload build artifacts
@@ -112,8 +112,8 @@ jobs:
         with:
           name: release-${{ matrix.target }}
           path: |
-            dist/ximonitor-server-${{ matrix.target }}
-            dist/ximonitor-agent-${{ matrix.target }}
+            dist/nodelite-server-${{ matrix.target }}
+            dist/nodelite-agent-${{ matrix.target }}
             dist/SHA256SUMS-${{ matrix.target }}.txt
 
       - name: Upload installer scripts
@@ -152,16 +152,16 @@ jobs:
           if ! gh release view "$TAG_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
             gh release create "$TAG_NAME" \
               --repo "$GH_REPO" \
-              --title "XiMonitor $TAG_NAME" \
+              --title "NodeLite $TAG_NAME" \
               --generate-notes
           fi
 
           gh release upload "$TAG_NAME" \
             --repo "$GH_REPO" \
-            release-assets/release-x86_64-unknown-linux-musl/ximonitor-server-x86_64-unknown-linux-musl \
-            release-assets/release-x86_64-unknown-linux-musl/ximonitor-agent-x86_64-unknown-linux-musl \
-            release-assets/release-aarch64-unknown-linux-musl/ximonitor-server-aarch64-unknown-linux-musl \
-            release-assets/release-aarch64-unknown-linux-musl/ximonitor-agent-aarch64-unknown-linux-musl \
+            release-assets/release-x86_64-unknown-linux-musl/nodelite-server-x86_64-unknown-linux-musl \
+            release-assets/release-x86_64-unknown-linux-musl/nodelite-agent-x86_64-unknown-linux-musl \
+            release-assets/release-aarch64-unknown-linux-musl/nodelite-server-aarch64-unknown-linux-musl \
+            release-assets/release-aarch64-unknown-linux-musl/nodelite-agent-aarch64-unknown-linux-musl \
             release-assets/release-scripts/install-server.sh \
             release-assets/release-scripts/install-agent.sh \
             release-assets/SHA256SUMS.txt \

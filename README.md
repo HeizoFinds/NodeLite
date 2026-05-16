@@ -1,12 +1,12 @@
-# XiMonitor
+# NodeLite
 
-XiMonitor 是一个用 Rust 编写的轻量级服务器监控面板，包含：
+NodeLite 是一个用 Rust 编写的轻量级服务器监控面板，包含：
 
-- `ximonitor-server`
+- `nodelite-server`
   中心服务，提供 WebSocket 接入、只读页面、只读 JSON API、SQLite 短期历史和快照恢复。
-- `ximonitor-agent`
+- `nodelite-agent`
   Linux agent，采集 CPU、负载、内存、磁盘、网络总流量、实时速率和 WebSocket RTT。
-- `ximonitor-proto`
+- `nodelite-proto`
   服务端与 agent 共用的配置、协议和数据模型。
 
 适合这样的场景：
@@ -22,14 +22,14 @@ XiMonitor 是一个用 Rust 编写的轻量级服务器监控面板，包含：
 1. 安装服务端
 
 ```bash
-curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/install-server.sh | sudo sh
+curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/install-server.sh | sudo sh
 ```
 
 2. 在服务端签发一条子机安装命令
 
 ```bash
-/usr/local/bin/ximonitor-server \
-  --config /opt/ximonitor/config/server.toml \
+/usr/local/bin/nodelite-server \
+  --config /opt/nodelite/config/server.toml \
   install-agent \
   --node-id hk-01 \
   --node-label "Hong Kong 01"
@@ -45,9 +45,9 @@ curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/ins
 
 ## 支持平台
 
-- `ximonitor-server`
+- `nodelite-server`
   推荐部署在 Linux（systemd 环境），官方发布产物提供 `x86_64-unknown-linux-musl` 与 `aarch64-unknown-linux-musl`
-- `ximonitor-agent`
+- `nodelite-agent`
   当前仅支持 Linux
 - 反向代理
   推荐使用 Nginx 或 Caddy 终结 HTTPS / WSS
@@ -79,14 +79,14 @@ curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/ins
 - **服务端内存占用**：4-10 MB
 - **Agent 内存占用**：800-1000 KB
 
-得益于 Rust 的零成本抽象和高效内存管理，XiMonitor 在保持功能完整的同时实现了极低的资源占用。
+得益于 Rust 的零成本抽象和高效内存管理，NodeLite 在保持功能完整的同时实现了极低的资源占用。
 
 ### 压测基线
 
 下面这组数据来自仓库内置的真实 loopback 压测：
 
 ```bash
-cargo test -p ximonitor-server load_test_scaling_scores -- --ignored --nocapture
+cargo test -p nodelite-server load_test_scaling_scores -- --ignored --nocapture
 ```
 
 测试机为 `Apple M1 Pro / 32 GB`，通过真实 WebSocket 建链、真实 `metrics` 上报和真实 `/api/overview` 轮询得到以下基线成绩：
@@ -110,8 +110,8 @@ cargo test -p ximonitor-server load_test_scaling_scores -- --ignored --nocapture
 - 一键安装与升级：
   - `install-server.sh`
   - `install-agent.sh`
-  - `ximonitor-server install-agent`
-  - `ximonitor-server upgrade-agent`
+  - `nodelite-server install-agent`
+  - `nodelite-server upgrade-agent`
 - 服务端只读页面：
   - `/`
   - `/nodes/{node_id}`
@@ -149,28 +149,28 @@ cargo check
 
 ```bash
 cargo build --release --target x86_64-unknown-linux-musl \
-  -p ximonitor-server \
-  -p ximonitor-agent
+  -p nodelite-server \
+  -p nodelite-agent
 
 cargo build --release --target aarch64-unknown-linux-musl \
-  -p ximonitor-server \
-  -p ximonitor-agent
+  -p nodelite-server \
+  -p nodelite-agent
 ```
 
 产物位置：
 
 ```bash
-target/x86_64-unknown-linux-musl/release/ximonitor-server
-target/x86_64-unknown-linux-musl/release/ximonitor-agent
-target/aarch64-unknown-linux-musl/release/ximonitor-server
-target/aarch64-unknown-linux-musl/release/ximonitor-agent
+target/x86_64-unknown-linux-musl/release/nodelite-server
+target/x86_64-unknown-linux-musl/release/nodelite-agent
+target/aarch64-unknown-linux-musl/release/nodelite-server
+target/aarch64-unknown-linux-musl/release/nodelite-agent
 ```
 
 ## 推荐部署拓扑
 
 生产环境建议这样放：
 
-1. `ximonitor-server` 监听在 `127.0.0.1:8080`
+1. `nodelite-server` 监听在 `127.0.0.1:8080`
 2. Nginx 或 Caddy 对外暴露 `443`
 3. 面板和 API 走 HTTPS
 4. Agent 通过 `wss://你的域名/ws` 接入
@@ -181,27 +181,27 @@ target/aarch64-unknown-linux-musl/release/ximonitor-agent
 
 推荐直接用 GitHub Release 里的交互式安装器。它会清屏、询问安装目录、监听端口、对外域名或 IP、只读面板账号密码，然后自动：
 
-- 按当前架构下载最新的 `ximonitor-server`
+- 按当前架构下载最新的 `nodelite-server`
 - 拉取 `SHA256SUMS.txt` 并校验二进制
 - 生成 `server.toml` 和 `server.json`
-- 注册并启动 `ximonitor-server.service`
+- 注册并启动 `nodelite-server.service`
 
 一条命令安装：
 
 ```bash
-curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/install-server.sh | sudo sh
+curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/install-server.sh | sudo sh
 ```
 
 同一条命令以后也可以直接拿来升级。脚本会自动识别现有安装，并默认切到 `upgrade` 模式；如果你想强制指定，也可以：
 
 ```bash
-curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/install-server.sh | \
-  sudo XIMONITOR_SERVER_MODE=upgrade sh
+curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/install-server.sh | \
+  sudo NODELITE_SERVER_MODE=upgrade sh
 ```
 
 脚本默认会：
 
-- 把程序数据放到你输入的安装目录下，默认建议 `/opt/ximonitor`
+- 把程序数据放到你输入的安装目录下，默认建议 `/opt/nodelite`
 - 监听在 `127.0.0.1:<随机端口>`
 - 要求你输入对外访问的域名或 IP，并据此生成 `public_base_url`
 - 生成一组只读面板 Basic Auth 账号
@@ -218,10 +218,10 @@ curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/ins
 
 如果你更想手工部署，也可以：
 
-1. 复制 [config/server.example.toml](/Users/bernard/Code/XiMonitor/config/server.example.toml) 和 [config/server.json.example](/Users/bernard/Code/XiMonitor/config/server.json.example)
-2. 把服务端二进制安装到 `/usr/local/bin/ximonitor-server`
+1. 复制 [config/server.example.toml](config/server.example.toml) 和 [config/server.json.example](config/server.json.example)
+2. 把服务端二进制安装到 `/usr/local/bin/nodelite-server`
 3. 手工创建 systemd unit
-4. 启动 `ximonitor-server.service`
+4. 启动 `nodelite-server.service`
 
 最少要确认的配置项是：
 
@@ -229,9 +229,9 @@ curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/ins
 [server]
 listen = "127.0.0.1:28080"
 public_base_url = "https://monitor.example.com"
-node_registry_path = "/opt/ximonitor/config/server.json"
-history_db_path = "/opt/ximonitor/data/history.sqlite3"
-snapshot_path = "/opt/ximonitor/data/snapshot.json"
+node_registry_path = "/opt/nodelite/config/server.json"
+history_db_path = "/opt/nodelite/data/history.sqlite3"
+snapshot_path = "/opt/nodelite/data/snapshot.json"
 
 [auth]
 username = "viewer"
@@ -251,19 +251,19 @@ auth_block_secs = 900
 查看服务端状态：
 
 ```bash
-sudo systemctl status ximonitor-server.service
-sudo journalctl -u ximonitor-server.service -f
+sudo systemctl status nodelite-server.service
+sudo journalctl -u nodelite-server.service -f
 ```
 
 如果服务端起不来，第一时间检查：
 
 ```bash
-sudo journalctl -u ximonitor-server.service -n 100 --no-pager
+sudo journalctl -u nodelite-server.service -n 100 --no-pager
 ```
 
 ## 认证与安全
 
-XiMonitor 的默认安全模型是：面板默认以只读查看为主，Agent 使用逐节点 token 接入，敏感配置优先通过服务端文件、CLI 与受保护的设置页修改。
+NodeLite 的默认安全模型是：面板默认以只读查看为主，Agent 使用逐节点 token 接入，敏感配置优先通过服务端文件、CLI 与受保护的设置页修改。
 
 ### Web 面板认证
 
@@ -297,7 +297,7 @@ PY
 把 secret 加进认证器 App 时，可以手工录入，也可以按下面格式生成二维码：
 
 ```text
-otpauth://totp/XiMonitor:viewer?secret=<totp_secret>&issuer=XiMonitor
+otpauth://totp/NodeLite:viewer?secret=<totp_secret>&issuer=NodeLite
 ```
 
 2FA 行为说明：
@@ -373,8 +373,8 @@ server {
 推荐直接在服务端执行 `install-agent` 子命令。它不会启动监听，只会修改 `server.json`、生成一次性 install token，然后打印一条可直接粘贴到子机上的安装命令。
 
 ```bash
-/usr/local/bin/ximonitor-server \
-  --config /opt/ximonitor/config/server.toml \
+/usr/local/bin/nodelite-server \
+  --config /opt/nodelite/config/server.toml \
   install-agent \
   --node-id hk-01 \
   --node-label "Hong Kong 01" \
@@ -399,8 +399,8 @@ server {
 如果你想看更详细的输出，包括 `agent.toml` 片段和到期时间，也可以继续使用 `issue-node`：
 
 ```bash
-/usr/local/bin/ximonitor-server \
-  --config /opt/ximonitor/config/server.toml \
+/usr/local/bin/nodelite-server \
+  --config /opt/nodelite/config/server.toml \
   issue-node \
   --node-id hk-01 \
   --node-label "Hong Kong 01"
@@ -411,8 +411,8 @@ server {
 如果你只想给已经安装过的 agent 打印一条升级命令，不需要节点参数，可以直接在服务端执行：
 
 ```bash
-/usr/local/bin/ximonitor-server \
-  --config /opt/ximonitor/config/server.toml \
+/usr/local/bin/nodelite-server \
+  --config /opt/nodelite/config/server.toml \
   upgrade-agent
 ```
 
@@ -422,20 +422,20 @@ server {
 
 ```bash
 curl -fsSL https://monitor.example.com/install/install-agent.sh | \
-  XIMONITOR_AGENT_INSTALL_TOKEN='one-time-token' sh -s -- \
+  NODELITE_AGENT_INSTALL_TOKEN='one-time-token' sh -s -- \
   --bootstrap-url https://monitor.example.com/install/bootstrap \
-  --base-url https://github.com/XiNian-dada/XiMonitor/releases/latest/download
+  --base-url https://github.com/XiNian-dada/NodeLite/releases/latest/download
 ```
 
 说明：
 
-- 脚本会检测架构并下载对应的 `ximonitor-agent-<target>` 二进制
+- 脚本会检测架构并下载对应的 `nodelite-agent-<target>` 二进制
 - 脚本会先把 GitHub `latest` 解析成具体 tag，再下载同一个 release 下的 `SHA256SUMS.txt` 和 agent 二进制，避免刚发版时 CDN 短时间不一致
 - 一次性 install token 已经内联在命令里，所以正常情况下不需要再手工输入
 - 长期 node token 只通过 bootstrap 响应体下发，不出现在 URL 或命令参数里
-- 会创建 `ximonitor-agent` 专用系统用户，并以该用户运行 systemd service
-- 会写入 `/etc/ximonitor/agent.toml`，并将目录/文件权限收紧到仅 root 与该服务用户可读
-- 会生成带最小权限沙箱限制的 `ximonitor-agent.service`
+- 会创建 `nodelite-agent` 专用系统用户，并以该用户运行 systemd service
+- 会写入 `/etc/nodelite/agent.toml`，并将目录/文件权限收紧到仅 root 与该服务用户可读
+- 会生成带最小权限沙箱限制的 `nodelite-agent.service`
 - 会执行 `daemon-reload`、`enable` 和 `restart`
 
 ### 子机安装步骤
@@ -450,8 +450,8 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
 检查 Agent 服务：
 
 ```bash
-sudo systemctl status ximonitor-agent.service
-sudo journalctl -u ximonitor-agent.service -f
+sudo systemctl status nodelite-agent.service
+sudo journalctl -u nodelite-agent.service -f
 ```
 
 如果你想手工运行安装脚本，也可以：
@@ -460,28 +460,28 @@ sudo journalctl -u ximonitor-agent.service -f
 sh scripts/install-agent.sh \
   --bootstrap-url https://monitor.example.com/install/bootstrap \
   --install-token <one-time-token> \
-  --base-url https://github.com/XiNian-dada/XiMonitor/releases/latest/download
+  --base-url https://github.com/XiNian-dada/NodeLite/releases/latest/download
 ```
 
 如果这台子机已经装过了，后续升级可以更简单，不需要重新拿 bootstrap：
 
 ```bash
 curl -fsSL https://monitor.example.com/install/install-agent.sh | \
-  XIMONITOR_AGENT_MODE=upgrade sh -s -- \
-  --base-url https://github.com/XiNian-dada/XiMonitor/releases/latest/download
+  NODELITE_AGENT_MODE=upgrade sh -s -- \
+  --base-url https://github.com/XiNian-dada/NodeLite/releases/latest/download
 ```
 
 升级模式会：
 
 - 只替换 agent 二进制
 - 重写并补齐 systemd service
-- 保留现有 `/etc/ximonitor/agent.toml`
+- 保留现有 `/etc/nodelite/agent.toml`
 - 自动修正目录和文件权限
-- 清理旧版本曾经写入的 `ximonitor-agent-auto-update.*` 定时更新单元
+- 清理旧版本曾经写入的 `nodelite-agent-auto-update.*` 定时更新单元
 
 如果你在升级时也传了 `--bootstrap-url` 和 install token，它会顺手刷新 agent 配置。
 
-XiMonitor 目前不再安装无人值守自动更新 timer。升级建议由管理员手动触发：先确认 release notes 与协议兼容，再执行 `--mode upgrade` 或在已鉴权的面板设置页点击更新。Agent 与 Server 的 WebSocket 握手包含显式 `protocol_version`，如果未来跨大版本出现不兼容协议，Server 会在握手阶段拒绝不匹配的 Agent 并记录警告，而不是让节点以未知协议继续运行。
+NodeLite 目前不再安装无人值守自动更新 timer。升级建议由管理员手动触发：先确认 release notes 与协议兼容，再执行 `--mode upgrade` 或在已鉴权的面板设置页点击更新。Agent 与 Server 的 WebSocket 握手包含显式 `protocol_version`，如果未来跨大版本出现不兼容协议，Server 会在握手阶段拒绝不匹配的 Agent 并记录警告，而不是让节点以未知协议继续运行。
 
 如果你已经有精确二进制地址，也可以继续使用自定义下载地址和校验文件：
 
@@ -490,7 +490,7 @@ sh scripts/install-agent.sh \
   --bootstrap-url https://monitor.example.com/install/bootstrap \
   --install-token <one-time-token> \
   --checksums-url https://your-host/releases/SHA256SUMS.txt \
-  --binary-url https://your-host/releases/ximonitor-agent-x86_64-unknown-linux-musl
+  --binary-url https://your-host/releases/nodelite-agent-x86_64-unknown-linux-musl
 ```
 
 如果 `--binary-url` 使用了自定义文件名，建议直接显式传入对应架构的 SHA-256，避免脚本按 release artifact 名称匹配 `SHA256SUMS.txt` 时找不到条目：
@@ -518,13 +518,13 @@ cp config/agent.example.toml config/agent.toml
 3. 本机采样自检：
 
 ```bash
-cargo run -p ximonitor-agent -- --config config/agent.toml --sample-once
+cargo run -p nodelite-agent -- --config config/agent.toml --sample-once
 ```
 
 4. 正常运行：
 
 ```bash
-cargo run -p ximonitor-agent -- --config config/agent.toml
+cargo run -p nodelite-agent -- --config config/agent.toml
 ```
 
 ## 常见排障
@@ -541,10 +541,10 @@ cargo run -p ximonitor-agent -- --config config/agent.toml
 
 1. 交叉编译 Linux `x86_64-unknown-linux-musl`
 2. 交叉编译 Linux `aarch64-unknown-linux-musl`
-3. 生成 `ximonitor-server-x86_64-unknown-linux-musl`
-4. 生成 `ximonitor-agent-x86_64-unknown-linux-musl`
-5. 生成 `ximonitor-server-aarch64-unknown-linux-musl`
-6. 生成 `ximonitor-agent-aarch64-unknown-linux-musl`
+3. 生成 `nodelite-server-x86_64-unknown-linux-musl`
+4. 生成 `nodelite-agent-x86_64-unknown-linux-musl`
+5. 生成 `nodelite-server-aarch64-unknown-linux-musl`
+6. 生成 `nodelite-agent-aarch64-unknown-linux-musl`
 7. 上传 `install-server.sh` 和 `install-agent.sh`
 8. 上传 `SHA256SUMS.txt`
 9. 自动创建 GitHub Release

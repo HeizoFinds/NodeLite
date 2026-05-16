@@ -1,5 +1,5 @@
 #!/bin/sh
-# XiMonitor Agent 一键安装 / 升级脚本。
+# NodeLite Agent 一键安装 / 升级脚本。
 #
 # 主要流程:
 #   1. 解析命令行参数与环境变量,确认目标架构与下载源。
@@ -32,25 +32,25 @@ shell_quote() {
 
 # ---- 命令行 / 环境变量入参 ----
 BOOTSTRAP_URL=""
-INSTALL_TOKEN="${XIMONITOR_AGENT_INSTALL_TOKEN:-}"
-INSTALL_TOKEN_FILE="${XIMONITOR_AGENT_INSTALL_TOKEN_FILE:-}"
+INSTALL_TOKEN="${NODELITE_AGENT_INSTALL_TOKEN:-}"
+INSTALL_TOKEN_FILE="${NODELITE_AGENT_INSTALL_TOKEN_FILE:-}"
 INSTALL_DIR="/usr/local/bin"
-CONFIG_DIR="/etc/ximonitor"
-MODE="${XIMONITOR_AGENT_MODE:-auto}"
-BASE_URL="${XIMONITOR_AGENT_BASE_URL:-https://github.com/XiNian-dada/XiMonitor/releases/latest/download}"
-CHECKSUMS_URL="${XIMONITOR_AGENT_CHECKSUMS_URL:-}"
-BINARY_URL="${XIMONITOR_AGENT_BINARY_URL:-}"
-SHA256_X86_64="${XIMONITOR_AGENT_SHA256_X86_64:-}"
-SHA256_AARCH64="${XIMONITOR_AGENT_SHA256_AARCH64:-}"
-SERVICE_USER="ximonitor-agent"
-SERVICE_GROUP="ximonitor-agent"
-STATE_DIR="/var/lib/ximonitor-agent"
+CONFIG_DIR="/etc/nodelite"
+MODE="${NODELITE_AGENT_MODE:-auto}"
+BASE_URL="${NODELITE_AGENT_BASE_URL:-https://github.com/XiNian-dada/NodeLite/releases/latest/download}"
+CHECKSUMS_URL="${NODELITE_AGENT_CHECKSUMS_URL:-}"
+BINARY_URL="${NODELITE_AGENT_BINARY_URL:-}"
+SHA256_X86_64="${NODELITE_AGENT_SHA256_X86_64:-}"
+SHA256_AARCH64="${NODELITE_AGENT_SHA256_AARCH64:-}"
+SERVICE_USER="nodelite-agent"
+SERVICE_GROUP="nodelite-agent"
+STATE_DIR="/var/lib/nodelite-agent"
 BIN_PATH=""
 CONFIG_PATH=""
-UNIT_PATH="/etc/systemd/system/ximonitor-agent.service"
-LEGACY_AUTO_UPDATE_HELPER_PATH="/usr/local/bin/ximonitor-agent-auto-update"
-LEGACY_AUTO_UPDATE_SERVICE_PATH="/etc/systemd/system/ximonitor-agent-auto-update.service"
-LEGACY_AUTO_UPDATE_TIMER_PATH="/etc/systemd/system/ximonitor-agent-auto-update.timer"
+UNIT_PATH="/etc/systemd/system/nodelite-agent.service"
+LEGACY_AUTO_UPDATE_HELPER_PATH="/usr/local/bin/nodelite-agent-auto-update"
+LEGACY_AUTO_UPDATE_SERVICE_PATH="/etc/systemd/system/nodelite-agent-auto-update.service"
+LEGACY_AUTO_UPDATE_TIMER_PATH="/etc/systemd/system/nodelite-agent-auto-update.timer"
 TMP_PATH=""
 BOOTSTRAP_TMP=""
 CURL_AUTH_CONFIG=""
@@ -234,8 +234,8 @@ resolve_release_base_url() {
 # 自动更新支持已移除。升级时顺手清理旧版本曾经写入的 timer / service,
 # 避免无人值守任务继续从 latest 通道自我替换 agent。
 cleanup_legacy_auto_update() {
-  systemctl disable --now ximonitor-agent-auto-update.timer >/dev/null 2>&1 || true
-  systemctl disable ximonitor-agent-auto-update.service >/dev/null 2>&1 || true
+  systemctl disable --now nodelite-agent-auto-update.timer >/dev/null 2>&1 || true
+  systemctl disable nodelite-agent-auto-update.service >/dev/null 2>&1 || true
   rm -f "$LEGACY_AUTO_UPDATE_HELPER_PATH" \
     "$LEGACY_AUTO_UPDATE_SERVICE_PATH" \
     "$LEGACY_AUTO_UPDATE_TIMER_PATH"
@@ -356,12 +356,12 @@ ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64|amd64)
     TARGET="x86_64-unknown-linux-musl"
-    ARTIFACT_NAME="ximonitor-agent-$TARGET"
+    ARTIFACT_NAME="nodelite-agent-$TARGET"
     EXPECTED_SHA256="$SHA256_X86_64"
     ;;
   aarch64|arm64)
     TARGET="aarch64-unknown-linux-musl"
-    ARTIFACT_NAME="ximonitor-agent-$TARGET"
+    ARTIFACT_NAME="nodelite-agent-$TARGET"
     EXPECTED_SHA256="$SHA256_AARCH64"
     ;;
   *)
@@ -376,7 +376,7 @@ else
   DOWNLOAD_URL="$BASE_URL/$ARTIFACT_NAME"
 fi
 
-BIN_PATH="$INSTALL_DIR/ximonitor-agent"
+BIN_PATH="$INSTALL_DIR/nodelite-agent"
 CONFIG_PATH="$CONFIG_DIR/agent.toml"
 
 existing_install=0
@@ -411,7 +411,7 @@ chmod 0755 "$INSTALL_DIR"
 chown root:"$SERVICE_GROUP" "$CONFIG_DIR" "$STATE_DIR"
 chmod 0750 "$CONFIG_DIR" "$STATE_DIR"
 
-TMP_PATH="$(mktemp "$INSTALL_DIR/ximonitor-agent.XXXXXX")"
+TMP_PATH="$(mktemp "$INSTALL_DIR/nodelite-agent.XXXXXX")"
 BOOTSTRAP_TMP="$(mktemp "$CONFIG_DIR/agent.toml.XXXXXX")"
 CURL_AUTH_CONFIG="$(mktemp "$STATE_DIR/install-curl.XXXXXX")"
 CHECKSUMS_TMP="$(mktemp "$STATE_DIR/install-sha256.XXXXXX")"
@@ -441,7 +441,7 @@ fi
 
 cat >"$UNIT_PATH" <<EOF
 [Unit]
-Description=XiMonitor Agent
+Description=NodeLite Agent
 After=network-online.target
 Wants=network-online.target
 
@@ -479,13 +479,13 @@ EOF
 systemctl daemon-reload
 cleanup_legacy_auto_update
 systemctl daemon-reload
-systemctl enable ximonitor-agent.service
-systemctl restart ximonitor-agent.service
+systemctl enable nodelite-agent.service
+systemctl restart nodelite-agent.service
 
 if [ "$MODE" = "upgrade" ]; then
-  printf '%s\n' "XiMonitor agent upgraded and restarted."
+  printf '%s\n' "NodeLite agent upgraded and restarted."
 else
-  printf '%s\n' "XiMonitor agent installed and started."
+  printf '%s\n' "NodeLite agent installed and started."
 fi
 printf '%s\n' "Config: $CONFIG_PATH"
-printf '%s\n' "Service: ximonitor-agent.service"
+printf '%s\n' "Service: nodelite-agent.service"

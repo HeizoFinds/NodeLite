@@ -93,5 +93,5 @@ jobs:
       - name: Cross build release binaries
         run: |
           cross build --locked --release --target "${{ matrix.target }}" \
-            -p ximonitor-server \
-            -p ximonitor-agent
+            -p nodelite-server \
+            -p nodelite-agent
