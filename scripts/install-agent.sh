@@ -321,6 +321,11 @@ Optional:
   --binary-url <exact-binary-url>
   --sha256-x86_64 <sha256-override>
   --sha256-aarch64 <sha256-override>
+
+Notes:
+  This script no longer installs unattended auto-update timers. Use
+  --mode upgrade manually, or trigger an upgrade from the authenticated
+  dashboard after checking the target release.
 EOF
       exit 0
       ;;
@@ -454,6 +459,18 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

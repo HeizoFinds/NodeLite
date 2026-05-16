@@ -205,6 +205,7 @@ curl -fsSL https://github.com/XiNian-dada/XiMonitor/releases/latest/download/ins
 - 监听在 `127.0.0.1:<随机端口>`
 - 要求你输入对外访问的域名或 IP，并据此生成 `public_base_url`
 - 生成一组只读面板 Basic Auth 账号
+- 生成带 `NoNewPrivileges`、`ProtectSystem`、`ProtectKernel*`、`CapabilityBoundingSet=` 等限制的 systemd service
 - 如果是升级，只替换二进制与 systemd unit，保留现有 `server.toml`、面板账号密码、节点 token 和注册表内容不变
 
 安装完成后会直接打印：
@@ -434,7 +435,7 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
 - 长期 node token 只通过 bootstrap 响应体下发，不出现在 URL 或命令参数里
 - 会创建 `ximonitor-agent` 专用系统用户，并以该用户运行 systemd service
 - 会写入 `/etc/ximonitor/agent.toml`，并将目录/文件权限收紧到仅 root 与该服务用户可读
-- 会生成 `ximonitor-agent.service`
+- 会生成带最小权限沙箱限制的 `ximonitor-agent.service`
 - 会执行 `daemon-reload`、`enable` 和 `restart`
 
 ### 子机安装步骤
@@ -479,6 +480,8 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
 - 清理旧版本曾经写入的 `ximonitor-agent-auto-update.*` 定时更新单元
 
 如果你在升级时也传了 `--bootstrap-url` 和 install token，它会顺手刷新 agent 配置。
+
+XiMonitor 目前不再安装无人值守自动更新 timer。升级建议由管理员手动触发：先确认 release notes 与协议兼容，再执行 `--mode upgrade` 或在已鉴权的面板设置页点击更新。Agent 与 Server 的 WebSocket 握手包含显式 `protocol_version`，如果未来跨大版本出现不兼容协议，Server 会在握手阶段拒绝不匹配的 Agent 并记录警告，而不是让节点以未知协议继续运行。
 
 如果你已经有精确二进制地址，也可以继续使用自定义下载地址和校验文件：
 
