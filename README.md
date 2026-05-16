@@ -490,6 +490,16 @@ sh scripts/install-agent.sh \
   --binary-url https://your-host/releases/ximonitor-agent-x86_64-unknown-linux-musl
 ```
 
+如果 `--binary-url` 使用了自定义文件名，建议直接显式传入对应架构的 SHA-256，避免脚本按 release artifact 名称匹配 `SHA256SUMS.txt` 时找不到条目：
+
+```bash
+sh scripts/install-agent.sh \
+  --bootstrap-url https://monitor.example.com/install/bootstrap \
+  --install-token <one-time-token> \
+  --binary-url https://your-host/releases/agent-linux-x86_64 \
+  --sha256-x86_64 <64-character-sha256>
+```
+
 ## 手工 Agent 启动
 
 如果你暂时不想用安装脚本，也可以手工部署 agent。

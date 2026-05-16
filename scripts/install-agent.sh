@@ -304,6 +304,12 @@ Usage:
   sh install-agent.sh \
     --bootstrap-url https://monitor.example.com/install/bootstrap
 
+Custom binary URL:
+  sh install-agent.sh \
+    --bootstrap-url https://monitor.example.com/install/bootstrap \
+    --binary-url https://your-host/releases/agent-linux-x86_64 \
+    --sha256-x86_64 <64-character-sha256>
+
 Optional:
   --install-token <one-time-token>
   --install-token-file <path>
