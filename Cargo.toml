@@ -1,13 +1,13 @@
 [workspace]
-members = ["ximonitor-agent", "ximonitor-proto", "ximonitor-server"]
+members = ["nodelite-agent", "nodelite-proto", "nodelite-server"]
 resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-authors = ["XiMonitor Contributors"]
-repository = "https://github.com/XiNian-dada/XiMonitor"
+authors = ["NodeLite Contributors"]
+repository = "https://github.com/XiNian-dada/NodeLite"
 
 [workspace.dependencies]
 anyhow = "1.0"

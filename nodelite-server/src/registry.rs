@@ -1,0 +1,1439 @@
+// 节点注册表:服务端唯一的"哪些节点被允许上报"的事实来源。
+//
+// 注册表是一份 JSON 文件,内容由 `RegistryFile` 结构序列化得到。
+// 服务端进程与运维 CLI(`server install-agent` 等)都会读写这份文件,
+// 因此对每次写入都采用 flock + 原子替换的策略。
+//
+// 字段语义:
+// - `RegisteredNode`:被认证的 Agent 凭证(node_id + token)。
+// - `InstallSession`:一次性的"安装令牌",拥有它可以拉取 Agent 配置。
+
+use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{Context, Result, anyhow, bail};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use getrandom::fill as fill_random;
+use nodelite_proto::{MAX_NODE_TAG_BYTES, MAX_NODE_TAGS, NodeIdentity};
+use serde::{Deserialize, Serialize};
+use tokio::fs;
+use tokio::sync::RwLock;
+use url::Url;
+
+use crate::auth::constant_time_compare_bytes;
+use crate::encoding::hex_encode;
+use crate::fs_security::{create_private_dir_all, ensure_directory_mode};
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+/// Agent Token 默认有效期:90 天。
+const DEFAULT_TOKEN_VALIDITY_DAYS: i64 = 90;
+
+/// 已登记节点的持久化条目。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegisteredNode {
+    pub node_id: String,
+    pub node_label: String,
+    pub token: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    /// Token 过期时间。None 表示永不过期(向后兼容旧版本注册表)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_expires_at: Option<DateTime<Utc>>,
+}
+
+/// 安装会话:由 CLI 颁发的一次性令牌,Agent 用它拉取自己的配置。
+///
+/// `expires_at` 为绝对过期时间;每次写入注册表时会顺带清理已过期会话。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstallSession {
+    pub token: String,
+    pub node_id: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// 注册表的运行期视图:进程内部以 HashMap 形式持有,便于鉴权 / 查询。
+#[derive(Debug, Clone)]
+pub struct NodeRegistry {
+    path: Arc<PathBuf>,
+    state: Arc<RwLock<RegistryState>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RegistryState {
+    entries: HashMap<String, RegisteredNode>,
+    install_sessions: HashMap<String, InstallSession>,
+}
+
+/// `server install-agent` / `server issue-node` 等命令传给注册表的请求结构。
+#[derive(Debug, Clone)]
+pub struct IssueNodeRequest {
+    pub node_id: String,
+    pub node_label: Option<String>,
+    pub tags: Vec<String>,
+    pub rotate_token: bool,
+}
+
+/// `IssueNodeRequest` 的结果集:同时返回节点凭证与一次性安装令牌。
+#[derive(Debug, Clone)]
+pub struct IssueNodeResult {
+    pub node: RegisteredNode,
+    pub created: bool,
+    pub rotated_token: bool,
+    pub install_token: String,
+    pub install_token_expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+struct RegistryFile {
+    #[serde(default)]
+    nodes: Vec<RegisteredNode>,
+    #[serde(default)]
+    install_sessions: Vec<InstallSession>,
+}
+
+/// 一次性安装令牌的有效期(分钟)。
+const INSTALL_TOKEN_TTL_MINUTES: i64 = 15;
+
+impl NodeRegistry {
+    /// 从磁盘加载注册表;文件不存在时返回空注册表(首次部署的合理状态)。
+    pub async fn load(path: &Path) -> Result<Self> {
+        let state = load_registry_state(path).await?;
+
+        Ok(Self {
+            path: Arc::new(path.to_path_buf()),
+            state: Arc::new(RwLock::new(state)),
+        })
+    }
+
+    /// 校验 Agent 提交的 Hello 信息与 token,通过后返回"覆盖了注册表里权威字段"的身份。
+    pub async fn authorize(&self, identity: &NodeIdentity, token: &str) -> Result<NodeIdentity> {
+        validate_runtime_identity(identity)?;
+        validate_non_empty("hello.token", token)?;
+        let state = self.state.read().await;
+        authorize_identity(&state.entries, identity, token)
+    }
+
+    /// 判断当前 token 是否仍是该节点的有效凭证。
+    /// 用于在长连接运行中检测"管理员是否已轮换该节点 token"。
+    pub async fn is_token_current(&self, node_id: &str, token: &str) -> bool {
+        let state = self.state.read().await;
+        is_token_current(&state.entries, node_id, token)
+    }
+
+    /// 查询节点 token 的过期时间。`None` 既可能表示节点不存在,也可能是旧注册表
+    /// 里的永不过期 token;调用方通常只在节点已通过认证后使用它。
+    pub async fn token_expires_at(&self, node_id: &str) -> Option<DateTime<Utc>> {
+        let state = self.state.read().await;
+        state
+            .entries
+            .get(node_id)
+            .and_then(|node| node.token_expires_at)
+    }
+
+    /// 刷新节点的 Token:生成新 Token 并延长过期时间。
+    /// 返回 (new_token, expires_at)。
+    pub async fn refresh_token(&self, node_id: &str) -> Result<(String, DateTime<Utc>)> {
+        let path = Arc::clone(&self.path);
+        let node_id = node_id.to_string();
+        let ((new_token, expires_at), _) = mutate_registry_file(path.as_ref(), move |file| {
+            let now = Utc::now();
+            let Some(node) = file.nodes.iter_mut().find(|n| n.node_id == node_id) else {
+                bail!("node not found");
+            };
+
+            let new_token = generate_token()?;
+            let expires_at = now + ChronoDuration::days(DEFAULT_TOKEN_VALIDITY_DAYS);
+            node.token = new_token.clone();
+            node.token_expires_at = Some(expires_at);
+
+            Ok(((new_token, expires_at), true))
+        })
+        .await?;
+
+        // 刷新内存中的状态
+        self.reload().await?;
+
+        Ok((new_token, expires_at))
+    }
+
+    /// 从磁盘重新加载注册表。返回 `Ok(true)` 表示发现了变化。
+    pub async fn reload(&self) -> Result<bool> {
+        let next_state = load_registry_state(self.path.as_path()).await?;
+        let mut state = self.state.write().await;
+        if *state == next_state {
+            return Ok(false);
+        }
+
+        *state = next_state;
+        Ok(true)
+    }
+
+    /// 已登记的节点数量。
+    pub async fn count(&self) -> usize {
+        let state = self.state.read().await;
+        state.entries.len()
+    }
+
+    /// 返回注册表中的节点条目,但不会暴露 token 字符串。
+    ///
+    /// 设置页需要查看 token 到期时间与登记标签;这些信息来自注册表而不是
+    /// 运行态快照。调用方负责只序列化安全字段,不要把 `token` 下发给浏览器。
+    pub async fn list_registered_nodes(&self) -> Vec<RegisteredNode> {
+        let state = self.state.read().await;
+        let mut nodes: Vec<_> = state.entries.values().cloned().collect();
+        nodes.sort_by(|left, right| {
+            left.node_label
+                .cmp(&right.node_label)
+                .then_with(|| left.node_id.cmp(&right.node_id))
+        });
+        nodes
+    }
+
+    /// 返回当前注册表里的全部 node_id,用于跨模块做被动清理。
+    pub async fn node_ids(&self) -> Vec<String> {
+        let state = self.state.read().await;
+        let mut node_ids: Vec<_> = state.entries.keys().cloned().collect();
+        node_ids.sort();
+        node_ids
+    }
+
+    /// 一次性消费安装令牌:成功时返回对应的 `RegisteredNode`,并把令牌从注册表移除。
+    pub async fn consume_install_token(&self, token: &str) -> Result<Option<RegisteredNode>> {
+        validate_non_empty("install token", token)?;
+
+        let token = token.to_string();
+        let (node, file) = mutate_registry_file(self.path.as_path(), move |file| {
+            let pruned = prune_expired_install_sessions(file, Utc::now());
+            let Some(index) = file
+                .install_sessions
+                .iter()
+                .position(|session| constant_time_eq(&session.token, &token))
+            else {
+                return Ok((None, pruned));
+            };
+
+            let session = file.install_sessions.remove(index);
+            let node = file
+                .nodes
+                .iter()
+                .find(|node| node.node_id == session.node_id)
+                .cloned();
+            Ok((node, true))
+        })
+        .await?;
+        self.replace_state_from_file(file).await?;
+        Ok(node)
+    }
+
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+
+    async fn replace_state_from_file(&self, file: RegistryFile) -> Result<()> {
+        let state = registry_state_from_file(self.path.as_path(), file)?;
+        let mut guard = self.state.write().await;
+        *guard = state;
+        Ok(())
+    }
+}
+
+/// 创建或更新一个节点:首次出现时插入新条目,已存在时按需轮换 token、覆盖标签等。
+///
+/// 同时为该节点签发一个一次性安装令牌。这是 CLI 命令的核心入口。
+pub async fn issue_node(path: &Path, request: IssueNodeRequest) -> Result<IssueNodeResult> {
+    validate_identifier("node_id", &request.node_id)?;
+    if let Some(node_label) = request.node_label.as_deref() {
+        validate_non_empty("node_label", node_label)?;
+    }
+    let normalized_tags = normalize_string_list(request.tags.clone());
+    validate_tag_list("tags", &normalized_tags)?;
+
+    let request = request.clone();
+    let (result, _) = mutate_registry_file(path, move |file| {
+        let now = Utc::now();
+        prune_expired_install_sessions(file, now);
+        let mut rotated_token = false;
+
+        if let Some(index) = file
+            .nodes
+            .iter()
+            .position(|node| node.node_id == request.node_id)
+        {
+            if let Some(node_label) = request.node_label.as_ref() {
+                file.nodes[index].node_label = node_label.trim().to_string();
+            }
+            if !request.tags.is_empty() {
+                file.nodes[index].tags = normalized_tags.clone();
+            }
+            if request.rotate_token {
+                file.nodes[index].token = generate_token()?;
+                file.nodes[index].token_expires_at =
+                    Some(now + ChronoDuration::days(DEFAULT_TOKEN_VALIDITY_DAYS));
+                rotated_token = true;
+            }
+
+            validate_registered_node(&file.nodes[index])?;
+            let node = file.nodes[index].clone();
+            let install_session = mint_install_session(file, &node.node_id, now)?;
+            return Ok((
+                IssueNodeResult {
+                    node,
+                    created: false,
+                    rotated_token,
+                    install_token: install_session.token,
+                    install_token_expires_at: install_session.expires_at,
+                },
+                true,
+            ));
+        }
+
+        let node = RegisteredNode {
+            node_id: request.node_id.trim().to_string(),
+            node_label: request
+                .node_label
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(request.node_id.as_str())
+                .to_string(),
+            token: generate_token()?,
+            tags: normalized_tags.clone(),
+            created_at: now,
+            token_expires_at: Some(now + ChronoDuration::days(DEFAULT_TOKEN_VALIDITY_DAYS)),
+        };
+        validate_registered_node(&node)?;
+
+        file.nodes.push(node.clone());
+        file.nodes
+            .sort_by(|left, right| left.node_id.cmp(&right.node_id));
+        let install_session = mint_install_session(file, &node.node_id, now)?;
+        Ok((
+            IssueNodeResult {
+                node,
+                created: true,
+                rotated_token,
+                install_token: install_session.token,
+                install_token_expires_at: install_session.expires_at,
+            },
+            true,
+        ))
+    })
+    .await?;
+
+    Ok(result)
+}
+
+/// 从 `public_base_url` 推导 Agent 应连接的 WebSocket URL(http → ws,https → wss)。
+pub fn build_agent_server_url(public_base_url: &str) -> Result<String> {
+    let mut url = Url::parse(public_base_url)
+        .with_context(|| "invalid server.public_base_url".to_string())?;
+    let scheme = match url.scheme() {
+        "http" => "ws",
+        "https" => "wss",
+        other => bail!("unsupported public_base_url scheme for agent install: {other}"),
+    };
+    url.set_scheme(scheme)
+        .map_err(|_| anyhow!("failed to set websocket scheme"))?;
+    url.set_path("/ws");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.into())
+}
+
+/// 拼装"安装脚本下载 URL"。
+pub fn build_install_script_url(public_base_url: &str) -> Result<String> {
+    let mut url = Url::parse(public_base_url)
+        .with_context(|| "invalid server.public_base_url".to_string())?;
+    url.set_path("/install/install-agent.sh");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.into())
+}
+
+/// 拼装"安装引导 URL":Agent 安装脚本会带上 Bearer 安装令牌请求这个地址换取自己的 agent.toml。
+pub fn build_install_bootstrap_url(public_base_url: &str) -> Result<String> {
+    let mut url = Url::parse(public_base_url)
+        .with_context(|| "invalid server.public_base_url".to_string())?;
+    url.set_path("/install/bootstrap");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.into())
+}
+
+/// 从 GitHub 仓库 URL 推导 `releases/latest/download` 形式的下载基地址。
+/// 只支持 GitHub 仓库,避免误把任意 URL 当作发布源。
+pub fn build_github_release_base_url(repository_url: &str) -> Result<String> {
+    let url = Url::parse(repository_url).with_context(|| "invalid repository URL".to_string())?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("repository URL must include a host"))?;
+    if host != "github.com" {
+        bail!("only GitHub repositories are supported for latest release installs");
+    }
+
+    let mut segments = url
+        .path_segments()
+        .ok_or_else(|| anyhow!("repository URL must include an owner and repo"))?;
+    let owner = segments
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("repository URL must include an owner"))?
+        .to_string();
+    let repo = segments
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("repository URL must include a repo"))?
+        .trim_end_matches(".git")
+        .to_string();
+
+    let mut release_url = url;
+    release_url.set_path(&format!("{owner}/{repo}/releases/latest/download"));
+    release_url.set_query(None);
+    release_url.set_fragment(None);
+    Ok(release_url.into())
+}
+
+/// 缺省下载源:由当前 crate 在编译期注入的仓库地址推导而来。
+pub fn default_agent_release_base_url() -> Result<String> {
+    build_github_release_base_url(env!("CARGO_PKG_REPOSITORY"))
+}
+
+/// 渲染"复制即可用"的安装命令文本。
+///
+/// 输出形如多行 `curl ... | sh ...`,把安装令牌通过环境变量传递,避免它出现在 `ps` 列表中。
+pub fn render_install_command(
+    public_base_url: &str,
+    install_token: &str,
+    agent_release_base_url: &str,
+) -> Result<String> {
+    let script_url = build_install_script_url(public_base_url)?;
+    let bootstrap_url = build_install_bootstrap_url(public_base_url)?;
+    let lines = [
+        format!("curl -fsSL {} | \\", shell_quote(&script_url)),
+        format!(
+            "  NODELITE_AGENT_INSTALL_TOKEN={} sh -s -- \\",
+            shell_quote(install_token)
+        ),
+        format!("  --bootstrap-url {} \\", shell_quote(&bootstrap_url)),
+        format!("  --base-url {}", shell_quote(agent_release_base_url)),
+    ];
+
+    Ok(lines.join("\n"))
+}
+
+/// 渲染就地升级 Agent 的命令文本。与 `render_install_command` 类似,但不需要令牌。
+pub fn render_upgrade_command(
+    public_base_url: &str,
+    agent_release_base_url: &str,
+) -> Result<String> {
+    let script_url = build_install_script_url(public_base_url)?;
+    let lines = [
+        format!("curl -fsSL {} | \\", shell_quote(&script_url)),
+        "  NODELITE_AGENT_MODE=upgrade sh -s -- \\".to_string(),
+        "  --mode upgrade \\".to_string(),
+        format!("  --base-url {}", shell_quote(agent_release_base_url)),
+    ];
+
+    Ok(lines.join("\n"))
+}
+
+/// 渲染单个节点的 `agent.toml` 文本,作为引导接口的响应体。
+pub fn render_agent_config(public_base_url: &str, node: &RegisteredNode) -> Result<String> {
+    let server_url = build_agent_server_url(public_base_url)?;
+    let mut content = String::new();
+    content.push_str("[agent]\n");
+    content.push_str(&format!("node_id = \"{}\"\n", toml_escape(&node.node_id)));
+    content.push_str(&format!(
+        "node_label = \"{}\"\n",
+        toml_escape(&node.node_label)
+    ));
+    content.push_str(&format!("server = \"{}\"\n", toml_escape(&server_url)));
+    content.push_str(&format!("token = \"{}\"\n", toml_escape(&node.token)));
+    content.push_str("report_interval_secs = 5\n");
+    if !node.tags.is_empty() {
+        let tags = node
+            .tags
+            .iter()
+            .map(|tag| format!("\"{}\"", toml_escape(tag)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        content.push_str(&format!("tags = [{tags}]\n"));
+    }
+    Ok(content)
+}
+
+async fn load_registry_file(path: &Path) -> Result<RegistryFile> {
+    let content = match fs::read_to_string(path).await {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RegistryFile::default());
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read node registry {}", path.display()));
+        }
+    };
+
+    let file: RegistryFile = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse node registry {}", path.display()))?;
+    validate_registry_file(path, &file)?;
+    Ok(file)
+}
+
+fn load_registry_file_sync(path: &Path) -> Result<RegistryFile> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RegistryFile::default());
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read node registry {}", path.display()));
+        }
+    };
+
+    let file: RegistryFile = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse node registry {}", path.display()))?;
+    validate_registry_file(path, &file)?;
+    Ok(file)
+}
+
+async fn load_registry_state(path: &Path) -> Result<RegistryState> {
+    let mut file = load_registry_file(path).await?;
+    prune_expired_install_sessions(&mut file, Utc::now());
+    registry_state_from_file(path, file)
+}
+
+fn registry_state_from_file(path: &Path, file: RegistryFile) -> Result<RegistryState> {
+    let mut entries = HashMap::with_capacity(file.nodes.len());
+    for node in file.nodes {
+        if entries.insert(node.node_id.clone(), node).is_some() {
+            bail!("duplicate node_id found in {}", path.display());
+        }
+    }
+    let mut install_sessions = HashMap::with_capacity(file.install_sessions.len());
+    for session in file.install_sessions {
+        if install_sessions
+            .insert(session.token.clone(), session)
+            .is_some()
+        {
+            bail!("duplicate install token found in {}", path.display());
+        }
+    }
+
+    Ok(RegistryState {
+        entries,
+        install_sessions,
+    })
+}
+
+fn save_registry_file_sync(path: &Path, file: &RegistryFile) -> Result<()> {
+    validate_registry_file(path, file)?;
+
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_private_dir_all(parent)?;
+    }
+
+    let payload =
+        serde_json::to_string_pretty(file).context("failed to serialize node registry")?;
+    let tmp_path = temporary_registry_path(path)?;
+    write_registry_payload(&tmp_path, &payload)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    harden_registry_permissions(&tmp_path)
+        .with_context(|| format!("failed to set permissions on {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, path)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    // rename 之后再 fsync 父目录,保证目录项变更也落盘,与 write_registry_payload 内部的
+    // fsync 配合,使 crash 后要么看到旧文件、要么看到完整新文件,不会出现空文件。
+    sync_parent_dir(path);
+    verify_registry_permissions(path)
+        .with_context(|| format!("insecure permissions after replacing {}", path.display()))?;
+    Ok(())
+}
+
+/// 在 `spawn_blocking` 中以"读 → 改 → 写"的方式更新注册表文件,并由 flock 保护互斥。
+async fn mutate_registry_file<T, F>(path: &Path, operation: F) -> Result<(T, RegistryFile)>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut RegistryFile) -> Result<(T, bool)> + Send + 'static,
+{
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        // 注册表的修改可能来自运行中的 Server,也可能来自一次性 CLI 命令,
+        // 所以在 read-modify-write 之前先拿到文件锁,保证串行化。
+        let _lock = acquire_registry_lock(&path)?;
+        let mut file = load_registry_file_sync(&path)?;
+        let (value, should_persist) = operation(&mut file)?;
+        if should_persist {
+            save_registry_file_sync(&path, &file)?;
+        }
+        Ok((value, file))
+    })
+    .await
+    .context("registry mutation task failed")?
+}
+
+fn temporary_registry_path(path: &Path) -> Result<PathBuf> {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("server.json");
+    // 并发写时固定 tmp 名会互相覆盖;加随机后缀让每个写操作拿到独立临时文件。
+    let mut suffix = [0u8; 8];
+    getrandom::fill(&mut suffix).context("failed to generate registry temp-file suffix")?;
+    let suffix_hex = suffix
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(path.with_file_name(format!("{file_name}.tmp.{suffix_hex}")))
+}
+
+fn write_registry_payload(path: &Path, payload: &str) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    file.write_all(payload.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    // rename 前确保数据已经刷盘,避免主机崩溃后留下空的注册表文件 —— 注册表丢失
+    // 等于所有 Agent 鉴权失败,后果比一次写入失败更严重。
+    file.sync_all()
+        .with_context(|| format!("failed to fsync {}", path.display()))?;
+    Ok(())
+}
+
+/// rename 之后 fsync 父目录,使新目录项随之持久化。
+/// 打不开父目录(权限等)时静默退出 —— 数据已经 fsync,目录项丢失只意味着回退到上一份注册表。
+fn sync_parent_dir(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if parent.as_os_str().is_empty() {
+        return;
+    }
+    let _ = std::fs::File::open(parent).and_then(|dir| dir.sync_all());
+}
+
+fn registry_lock_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("server.json");
+    path.with_file_name(format!("{file_name}.lock"))
+}
+
+fn acquire_registry_lock(path: &Path) -> Result<RegistryFileLock> {
+    let lock_path = registry_lock_path(path);
+    if let Some(parent) = lock_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_private_dir_all(parent)?;
+    }
+
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    let file = options
+        .open(&lock_path)
+        .with_context(|| format!("failed to open {}", lock_path.display()))?;
+    harden_registry_permissions(&lock_path)?;
+    lock_file_exclusive(&file)
+        .with_context(|| format!("failed to lock {}", lock_path.display()))?;
+    Ok(RegistryFileLock { file, lock_path })
+}
+
+fn lock_file_exclusive(file: &File) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error()).context("flock failed");
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+    }
+
+    Ok(())
+}
+
+fn unlock_file(file: &File) {
+    #[cfg(unix)]
+    {
+        let _ = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+    }
+}
+
+fn harden_registry_permissions(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        ensure_directory_mode(parent, 0o700)?;
+    }
+    #[cfg(unix)]
+    {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to chmod {}", path.display()))?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+
+    Ok(())
+}
+
+fn verify_registry_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mode = std::fs::metadata(path)
+            .with_context(|| format!("failed to stat {}", path.display()))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode != 0o600 {
+            bail!("{} must be mode 0600, got {mode:o}", path.display());
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+
+    Ok(())
+}
+
+fn validate_registry_file(path: &Path, file: &RegistryFile) -> Result<()> {
+    let mut seen_nodes = HashMap::with_capacity(file.nodes.len());
+    for node in &file.nodes {
+        validate_registered_node(node)?;
+        if seen_nodes.insert(node.node_id.as_str(), ()).is_some() {
+            bail!("duplicate node_id {} in {}", node.node_id, path.display());
+        }
+    }
+    let mut seen_install_tokens = HashMap::with_capacity(file.install_sessions.len());
+    for session in &file.install_sessions {
+        validate_install_session(session)?;
+        if !seen_nodes.contains_key(session.node_id.as_str()) {
+            bail!(
+                "install token for unknown node_id {} in {}",
+                session.node_id,
+                path.display()
+            );
+        }
+        if seen_install_tokens
+            .insert(session.token.as_str(), ())
+            .is_some()
+        {
+            bail!("duplicate install token in {}", path.display());
+        }
+    }
+    Ok(())
+}
+
+fn validate_registered_node(node: &RegisteredNode) -> Result<()> {
+    validate_identifier("node.node_id", &node.node_id)?;
+    validate_non_empty("node.node_label", &node.node_label)?;
+    validate_non_empty("node.token", &node.token)?;
+    validate_tag_list("node.tags", &node.tags)?;
+    Ok(())
+}
+
+fn validate_install_session(session: &InstallSession) -> Result<()> {
+    validate_non_empty("install_session.token", &session.token)?;
+    validate_identifier("install_session.node_id", &session.node_id)?;
+    Ok(())
+}
+
+fn prune_expired_install_sessions(file: &mut RegistryFile, now: DateTime<Utc>) -> bool {
+    let original_len = file.install_sessions.len();
+    file.install_sessions
+        .retain(|session| session.expires_at > now);
+    original_len != file.install_sessions.len()
+}
+
+fn mint_install_session(
+    file: &mut RegistryFile,
+    node_id: &str,
+    now: DateTime<Utc>,
+) -> Result<InstallSession> {
+    file.install_sessions
+        .retain(|session| session.node_id != node_id);
+    let session = InstallSession {
+        token: generate_token()?,
+        node_id: node_id.to_string(),
+        created_at: now,
+        expires_at: now + ChronoDuration::minutes(INSTALL_TOKEN_TTL_MINUTES),
+    };
+    file.install_sessions.push(session.clone());
+    Ok(session)
+}
+
+fn authorize_identity(
+    entries: &HashMap<String, RegisteredNode>,
+    identity: &NodeIdentity,
+    token: &str,
+) -> Result<NodeIdentity> {
+    if let Some(entry) = entries.get(identity.node_id.as_str()) {
+        if !constant_time_eq(token, &entry.token) {
+            bail!("unauthorized");
+        }
+
+        if !token_is_unexpired(entry, Utc::now()) {
+            bail!("token expired");
+        }
+
+        let mut identity = identity.clone();
+        identity.node_id = entry.node_id.clone();
+        identity.node_label = entry.node_label.clone();
+        identity.tags = entry.tags.clone();
+        return Ok(identity);
+    }
+
+    bail!("unauthorized");
+}
+
+fn is_token_current(entries: &HashMap<String, RegisteredNode>, node_id: &str, token: &str) -> bool {
+    if let Some(entry) = entries.get(node_id) {
+        return constant_time_eq(token, &entry.token) && token_is_unexpired(entry, Utc::now());
+    }
+
+    false
+}
+
+fn token_is_unexpired(entry: &RegisteredNode, now: DateTime<Utc>) -> bool {
+    entry
+        .token_expires_at
+        .is_none_or(|expires_at| now < expires_at)
+}
+
+/// 常量时间字符串比较,用于 token 校验,避免基于响应耗时的旁路攻击。
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    constant_time_compare_bytes(left.as_bytes(), right.as_bytes())
+}
+
+struct RegistryFileLock {
+    file: File,
+    lock_path: PathBuf,
+}
+
+impl Drop for RegistryFileLock {
+    fn drop(&mut self) {
+        unlock_file(&self.file);
+        let _ = harden_registry_permissions(&self.lock_path);
+    }
+}
+
+fn validate_runtime_identity(identity: &NodeIdentity) -> Result<()> {
+    validate_identifier("identity.node_id", &identity.node_id)?;
+    validate_non_empty("identity.node_label", &identity.node_label)?;
+    validate_non_empty("identity.agent_version", &identity.agent_version)?;
+    validate_non_empty("identity.hostname", &identity.hostname)?;
+    validate_non_empty("identity.os", &identity.os)?;
+    validate_tag_list("identity.tags", &identity.tags)?;
+    Ok(())
+}
+
+fn validate_identifier(field: &str, value: &str) -> Result<()> {
+    validate_non_empty(field, value)?;
+    if value.len() > 128 {
+        bail!("{field} must be <= 128 characters");
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        bail!("{field} must use only ASCII letters, numbers, '-', '_' or '.'");
+    }
+    Ok(())
+}
+
+fn validate_non_empty(field: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("{field} must not be empty");
+    }
+    Ok(())
+}
+
+fn normalize_string_list(values: Vec<String>) -> Vec<String> {
+    let mut values: Vec<String> = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn validate_tag_list(field: &str, values: &[String]) -> Result<()> {
+    if values.len() > MAX_NODE_TAGS {
+        bail!("{field} must contain at most {MAX_NODE_TAGS} tags");
+    }
+    for (index, value) in values.iter().enumerate() {
+        if value.len() > MAX_NODE_TAG_BYTES {
+            bail!("{field}[{index}] must be <= {MAX_NODE_TAG_BYTES} bytes");
+        }
+    }
+    Ok(())
+}
+
+/// 生成 256-bit 的随机 token 并以十六进制字符串形式返回。
+fn generate_token() -> Result<String> {
+    let mut bytes = [0_u8; 32];
+    fill_random(&mut bytes).context("failed to gather secure random bytes")?;
+    Ok(hex_encode(&bytes))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn toml_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use chrono::{Duration as ChronoDuration, Utc};
+    use tokio::runtime::Runtime;
+
+    use super::{
+        IssueNodeRequest, MAX_NODE_TAG_BYTES, NodeRegistry, RegisteredNode, RegistryFile,
+        build_agent_server_url, build_github_release_base_url, default_agent_release_base_url,
+        issue_node, render_install_command, validate_registered_node,
+    };
+    use nodelite_proto::NodeIdentity;
+
+    #[test]
+    fn agent_server_url_uses_wss_for_https() {
+        let url = build_agent_server_url("https://monitor.example.com").expect("url should build");
+        assert_eq!(url, "wss://monitor.example.com/ws");
+    }
+
+    #[test]
+    fn registry_authorizes_per_node_token_and_overrides_metadata() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir =
+                std::env::temp_dir().join(format!("nodelite-registry-auth-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let path = temp_dir.join("server.json");
+            let file = RegistryFile {
+                nodes: vec![RegisteredNode {
+                    node_id: "osaka-01".to_string(),
+                    node_label: "Osaka 01".to_string(),
+                    token: "secret".to_string(),
+                    tags: vec!["edge".to_string()],
+                    created_at: Utc::now(),
+                    token_expires_at: None,
+                }],
+                install_sessions: Vec::new(),
+            };
+            std::fs::write(&path, serde_json::to_string_pretty(&file).expect("json"))
+                .expect("registry should be written");
+            let registry = NodeRegistry::load(&path)
+                .await
+                .expect("registry should load");
+            let identity = NodeIdentity {
+                node_id: "osaka-01".to_string(),
+                node_label: "Wrong".to_string(),
+                hostname: "osaka-01.internal".to_string(),
+                os: "Ubuntu".to_string(),
+                kernel_version: None,
+                cpu_model: None,
+                cpu_cores: 2,
+                agent_version: "0.1.0".to_string(),
+                boot_time: None,
+                tags: vec!["wrong".to_string()],
+            };
+
+            let authorized = registry
+                .authorize(&identity, "secret")
+                .await
+                .expect("identity should authorize");
+            assert_eq!(authorized.node_label, "Osaka 01");
+            assert_eq!(authorized.tags, vec!["edge"]);
+
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn issue_node_persists_registry_and_renders_install_command() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir = std::env::temp_dir().join(format!("nodelite-registry-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let path = temp_dir.join("server.json");
+            let issued = issue_node(
+                &path,
+                IssueNodeRequest {
+                    node_id: "hk-01".to_string(),
+                    node_label: Some("Hong Kong 01".to_string()),
+                    tags: vec!["edge".to_string(), "apac".to_string()],
+                    rotate_token: false,
+                },
+            )
+            .await
+            .expect("node should be issued");
+            assert!(issued.created);
+
+            let stored = std::fs::read_to_string(&path).expect("registry should be stored");
+            let parsed: RegistryFile =
+                serde_json::from_str(&stored).expect("stored registry should parse");
+            assert_eq!(parsed.nodes.len(), 1);
+            assert_eq!(parsed.install_sessions.len(), 1);
+            assert_eq!(parsed.install_sessions[0].token, issued.install_token);
+
+            let command = render_install_command(
+                "https://monitor.example.com",
+                &issued.install_token,
+                "https://github.com/XiNian-dada/NodeLite/releases/latest/download",
+            )
+            .expect("install command should render");
+            assert!(command.contains("--bootstrap-url"));
+            assert!(command.contains("/install-agent.sh"));
+            assert!(command.contains("NODELITE_AGENT_INSTALL_TOKEN="));
+            assert!(command.contains(&issued.install_token));
+            assert!(!command.contains(&issued.node.token));
+
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn registry_reload_picks_up_rotated_tokens() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir =
+                std::env::temp_dir().join(format!("nodelite-registry-reload-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let path = temp_dir.join("server.json");
+
+            let issued = issue_node(
+                &path,
+                IssueNodeRequest {
+                    node_id: "hk-01".to_string(),
+                    node_label: Some("Hong Kong 01".to_string()),
+                    tags: Vec::new(),
+                    rotate_token: false,
+                },
+            )
+            .await
+            .expect("node should be issued");
+            let old_token = issued.node.token.clone();
+            let registry = NodeRegistry::load(&path)
+                .await
+                .expect("registry should load");
+            assert!(registry.is_token_current("hk-01", &old_token).await);
+
+            let rotated = issue_node(
+                &path,
+                IssueNodeRequest {
+                    node_id: "hk-01".to_string(),
+                    node_label: Some("Hong Kong 01".to_string()),
+                    tags: Vec::new(),
+                    rotate_token: true,
+                },
+            )
+            .await
+            .expect("node token should rotate");
+            assert!(registry.reload().await.expect("reload should succeed"));
+            assert!(!registry.is_token_current("hk-01", &old_token).await);
+            assert!(
+                registry
+                    .is_token_current("hk-01", &rotated.node.token)
+                    .await
+            );
+
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn install_tokens_are_one_time_use() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir =
+                std::env::temp_dir().join(format!("nodelite-install-token-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let path = temp_dir.join("server.json");
+
+            let issued = issue_node(
+                &path,
+                IssueNodeRequest {
+                    node_id: "hk-01".to_string(),
+                    node_label: Some("Hong Kong 01".to_string()),
+                    tags: Vec::new(),
+                    rotate_token: false,
+                },
+            )
+            .await
+            .expect("node should be issued");
+            let registry = NodeRegistry::load(&path)
+                .await
+                .expect("registry should load");
+
+            let consumed = registry
+                .consume_install_token(&issued.install_token)
+                .await
+                .expect("install token should be consumable")
+                .expect("install token should resolve to a node");
+            assert_eq!(consumed.node_id, issued.node.node_id);
+            assert_eq!(consumed.token, issued.node.token);
+            assert!(
+                registry
+                    .consume_install_token(&issued.install_token)
+                    .await
+                    .expect("second install token lookup should succeed")
+                    .is_none()
+            );
+
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn expired_tokens_are_not_current_after_handshake() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir =
+                std::env::temp_dir().join(format!("nodelite-expired-token-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let path = temp_dir.join("server.json");
+            let file = RegistryFile {
+                nodes: vec![RegisteredNode {
+                    node_id: "expired-01".to_string(),
+                    node_label: "Expired 01".to_string(),
+                    token: "secret".to_string(),
+                    tags: vec![],
+                    created_at: Utc::now(),
+                    token_expires_at: Some(Utc::now() - ChronoDuration::seconds(1)),
+                }],
+                install_sessions: Vec::new(),
+            };
+            std::fs::write(&path, serde_json::to_string_pretty(&file).expect("json"))
+                .expect("registry should be written");
+            let registry = NodeRegistry::load(&path)
+                .await
+                .expect("registry should load");
+
+            assert!(!registry.is_token_current("expired-01", "secret").await);
+
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn unenrolled_nodes_are_rejected() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir =
+                std::env::temp_dir().join(format!("nodelite-registry-legacy-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let path = temp_dir.join("server.json");
+            std::fs::write(&path, "{\"nodes\":[]}").expect("empty registry should be written");
+
+            let registry = NodeRegistry::load(&path)
+                .await
+                .expect("registry should load");
+            let identity = NodeIdentity {
+                node_id: "legacy-01".to_string(),
+                node_label: "Legacy 01".to_string(),
+                hostname: "legacy-01.internal".to_string(),
+                os: "Ubuntu".to_string(),
+                kernel_version: None,
+                cpu_model: None,
+                cpu_cores: 2,
+                agent_version: "0.1.0".to_string(),
+                boot_time: None,
+                tags: Vec::new(),
+            };
+
+            let error = registry
+                .authorize(&identity, "some-token")
+                .await
+                .expect_err("unenrolled node should be rejected");
+            assert_eq!(error.to_string(), "unauthorized");
+
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn wrong_tokens_use_the_same_auth_error() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir =
+                std::env::temp_dir().join(format!("nodelite-registry-auth-error-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let path = temp_dir.join("server.json");
+            let file = RegistryFile {
+                nodes: vec![RegisteredNode {
+                    node_id: "osaka-01".to_string(),
+                    node_label: "Osaka 01".to_string(),
+                    token: "secret".to_string(),
+                    tags: vec![],
+                    created_at: Utc::now(),
+                    token_expires_at: None,
+                }],
+                install_sessions: Vec::new(),
+            };
+            std::fs::write(&path, serde_json::to_string_pretty(&file).expect("json"))
+                .expect("registry should be written");
+            let registry = NodeRegistry::load(&path)
+                .await
+                .expect("registry should load");
+            let identity = NodeIdentity {
+                node_id: "osaka-01".to_string(),
+                node_label: "Osaka 01".to_string(),
+                hostname: "osaka-01.internal".to_string(),
+                os: "Ubuntu".to_string(),
+                kernel_version: None,
+                cpu_model: None,
+                cpu_cores: 2,
+                agent_version: "0.1.0".to_string(),
+                boot_time: None,
+                tags: Vec::new(),
+            };
+
+            let error = registry
+                .authorize(&identity, "wrong-secret")
+                .await
+                .expect_err("wrong token should be rejected");
+            assert_eq!(error.to_string(), "unauthorized");
+
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn issued_registry_file_is_mode_600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir =
+                std::env::temp_dir().join(format!("nodelite-registry-mode-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let config_dir = temp_dir.join("config");
+            let path = config_dir.join("server.json");
+
+            issue_node(
+                &path,
+                IssueNodeRequest {
+                    node_id: "hk-01".to_string(),
+                    node_label: Some("Hong Kong 01".to_string()),
+                    tags: Vec::new(),
+                    rotate_token: false,
+                },
+            )
+            .await
+            .expect("node should be issued");
+
+            let dir_mode = std::fs::metadata(&config_dir)
+                .expect("config dir should exist")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(dir_mode, 0o700);
+
+            let mode = std::fs::metadata(&path)
+                .expect("metadata should exist")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&config_dir);
+            let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn github_release_base_url_uses_latest_download_path() {
+        let release_url =
+            build_github_release_base_url("https://github.com/XiNian-dada/NodeLite.git")
+                .expect("release url should build");
+        assert_eq!(
+            release_url,
+            "https://github.com/XiNian-dada/NodeLite/releases/latest/download"
+        );
+    }
+
+    #[test]
+    fn default_release_base_url_points_at_github_latest_download() {
+        let release_url =
+            default_agent_release_base_url().expect("default release url should build");
+        assert_eq!(
+            release_url,
+            "https://github.com/XiNian-dada/NodeLite/releases/latest/download"
+        );
+    }
+
+    #[test]
+    fn validate_registered_node_rejects_oversized_tags() {
+        let mut node = RegisteredNode {
+            node_id: "hk-01".to_string(),
+            node_label: "Hong Kong 01".to_string(),
+            token: "secret-token".to_string(),
+            tags: vec!["edge".to_string()],
+            created_at: Utc::now(),
+            token_expires_at: None,
+        };
+        node.tags = vec!["x".repeat(MAX_NODE_TAG_BYTES + 1)];
+
+        let error = validate_registered_node(&node).expect_err("oversized tag should fail");
+        assert!(error.to_string().contains("node.tags[0]"));
+    }
+
+    #[tokio::test]
+    async fn issue_node_rejects_excessive_tags() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("nodelite-registry-tag-limit-test-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir");
+        let path = temp_dir.join("server.json");
+
+        let error = issue_node(
+            &path,
+            IssueNodeRequest {
+                node_id: "hk-01".to_string(),
+                node_label: Some("Hong Kong 01".to_string()),
+                tags: (0..1000).map(|index| format!("tag-{index}")).collect(),
+                rotate_token: false,
+            },
+        )
+        .await
+        .expect_err("too many tags should fail");
+
+        assert!(error.to_string().contains("tags"));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn concurrent_issue_node_preserves_all_nodes() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("nodelite-registry-concurrent-test-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir");
+        let path = temp_dir.join("server.json");
+
+        // 并发 issue 10 个不同节点,验证 flock + 唯一 tmp 文件名能保证全部落盘。
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let path = path.clone();
+            let handle = tokio::spawn(async move {
+                issue_node(
+                    &path,
+                    IssueNodeRequest {
+                        node_id: format!("node-{i:02}"),
+                        node_label: Some(format!("Node {i:02}")),
+                        tags: Vec::new(),
+                        rotate_token: false,
+                    },
+                )
+                .await
+                .expect("issue should succeed")
+            });
+            handles.push(handle);
+        }
+
+        let results = futures::future::join_all(handles).await;
+        assert_eq!(results.len(), 10, "all tasks should complete");
+
+        let registry = NodeRegistry::load(&path).await.expect("load");
+        let node_ids: Vec<_> = registry
+            .state
+            .read()
+            .await
+            .entries
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(
+            node_ids.len(),
+            10,
+            "all 10 nodes should be present in registry"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&temp_dir);
+    }
+}

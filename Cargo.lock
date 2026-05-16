@@ -857,6 +857,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "nodelite-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "futures",
+ "getrandom 0.3.4",
+ "libc",
+ "nodelite-proto",
+ "rustls",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "nodelite-proto"
+version = "0.1.0"
+dependencies = [
+ "base32",
+ "chrono",
+ "http",
+ "serde",
+ "serde_json",
+ "toml",
+ "url",
+]
+
+[[package]]
+name = "nodelite-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base32",
+ "base64",
+ "chrono",
+ "clap",
+ "futures",
+ "getrandom 0.3.4",
+ "hex",
+ "libc",
+ "nodelite-proto",
+ "qrcode",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "subtle",
+ "time",
+ "tokio",
+ "tokio-tungstenite",
+ "totp-lite",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1901,70 +1965,6 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
-
-[[package]]
-name = "ximonitor-agent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "futures",
- "getrandom 0.3.4",
- "libc",
- "rustls",
- "serde_json",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "tracing-subscriber",
- "url",
- "ximonitor-proto",
-]
-
-[[package]]
-name = "ximonitor-proto"
-version = "0.1.0"
-dependencies = [
- "base32",
- "chrono",
- "http",
- "serde",
- "serde_json",
- "toml",
- "url",
-]
-
-[[package]]
-name = "ximonitor-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "base32",
- "base64",
- "chrono",
- "clap",
- "futures",
- "getrandom 0.3.4",
- "hex",
- "libc",
- "qrcode",
- "rusqlite",
- "serde",
- "serde_json",
- "subtle",
- "time",
- "tokio",
- "tokio-tungstenite",
- "totp-lite",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
- "ximonitor-proto",
-]
 
 [[package]]
 name = "yoke"
