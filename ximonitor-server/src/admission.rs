@@ -49,6 +49,7 @@ pub struct WsConnectionPermit {
 }
 
 /// 准入失败的具体原因,对应到不同的 HTTP 响应。
+#[derive(Debug)]
 pub enum WsAdmissionError {
     TotalCapacity,
     IpCapacity,
@@ -140,11 +141,14 @@ impl WsAdmissionController {
         }
     }
 
-    /// 锁住状态;锁中毒时取出受污染状态继续,因为不愿意因此让整个服务崩溃。
+    /// 锁住状态;锁中毒说明上一次持锁路径发生 panic,此时重置为安全默认值。
     fn lock_state(&self) -> std::sync::MutexGuard<'_, WsAdmissionState> {
         self.state.lock().unwrap_or_else(|poisoned| {
-            tracing::error!("WsAdmissionController mutex poisoned; recovering with stale state");
-            poisoned.into_inner()
+            tracing::error!("WsAdmissionController mutex poisoned; resetting admission state");
+            let mut guard = poisoned.into_inner();
+            *guard = WsAdmissionState::default();
+            self.state.clear_poison();
+            guard
         })
     }
 }
@@ -228,10 +232,11 @@ impl InstallAdmissionController {
 
     fn lock_state(&self) -> std::sync::MutexGuard<'_, InstallAdmissionState> {
         self.state.lock().unwrap_or_else(|poisoned| {
-            tracing::error!(
-                "InstallAdmissionController mutex poisoned; recovering with stale state"
-            );
-            poisoned.into_inner()
+            tracing::error!("InstallAdmissionController mutex poisoned; resetting admission state");
+            let mut guard = poisoned.into_inner();
+            *guard = InstallAdmissionState::default();
+            self.state.clear_poison();
+            guard
         })
     }
 }
@@ -333,5 +338,71 @@ pub fn ws_admission_error_response(error: WsAdmissionError) -> Response {
             "too many recent websocket authentication failures",
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::str::FromStr;
+
+    use super::*;
+
+    fn test_ws_config() -> WsConfig {
+        WsConfig {
+            max_total_connections: 2,
+            max_connections_per_ip: 1,
+            auth_fail_window_secs: 60,
+            auth_fail_max_attempts: 2,
+            auth_block_secs: 60,
+        }
+    }
+
+    fn test_install_config() -> InstallAdmissionConfig {
+        InstallAdmissionConfig {
+            auth_fail_window_secs: 60,
+            auth_fail_max_attempts: 2,
+            auth_block_secs: 60,
+        }
+    }
+
+    #[test]
+    fn websocket_admission_resets_state_after_mutex_poison() {
+        let controller = WsAdmissionController::new(&test_ws_config());
+        let client_ip = IpAddr::from_str("198.51.100.10").expect("valid test IP");
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let mut state = controller.state.lock().expect("lock state");
+            state.total_active_connections = 99;
+            state.active_by_ip.insert(client_ip, 99);
+            panic!("poison admission state");
+        }));
+
+        let permit = controller
+            .try_acquire(client_ip)
+            .expect("poisoned state should be reset before admitting new sessions");
+        drop(permit);
+        assert!(controller.state.lock().is_ok());
+    }
+
+    #[test]
+    fn install_admission_resets_state_after_mutex_poison() {
+        let controller = InstallAdmissionController::new(test_install_config());
+        let client_ip = IpAddr::from_str("198.51.100.11").expect("valid test IP");
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let mut state = controller.state.lock().expect("lock state");
+            state.auth_failures.insert(
+                client_ip,
+                AuthFailureState {
+                    recent_failures: VecDeque::from([Instant::now(), Instant::now()]),
+                    blocked_until: Some(Instant::now() + Duration::from_secs(60)),
+                },
+            );
+            panic!("poison install admission state");
+        }));
+
+        assert!(controller.check(client_ip).is_ok());
+        assert!(controller.state.lock().is_ok());
     }
 }

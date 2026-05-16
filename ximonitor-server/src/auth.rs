@@ -240,10 +240,13 @@ fn prune_expired_sessions(store: &mut TwoFactorSessionStore, now: Instant) {
         .retain(|_, expires_at| *expires_at > now);
 }
 
-fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+fn lock_mutex(mutex: &Mutex<TwoFactorSessionStore>) -> MutexGuard<'_, TwoFactorSessionStore> {
     mutex.lock().unwrap_or_else(|poisoned| {
-        error!("mutex poisoned; recovering with stale state");
-        poisoned.into_inner()
+        error!("two-factor session mutex poisoned; resetting session state");
+        let mut guard = poisoned.into_inner();
+        *guard = TwoFactorSessionStore::default();
+        mutex.clear_poison();
+        guard
     })
 }
 
@@ -350,7 +353,10 @@ pub fn secure_cookies(config: &ServerConfig) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
     use super::totp_code_for_step;
+    use super::*;
 
     #[test]
     fn totp_generation_uses_unix_seconds_for_rfc_6238_compatibility() {
@@ -359,5 +365,23 @@ mod tests {
         // RFC 6238 Appendix B gives SHA1/8-digit code 94287082 at Unix time
         // 59. With 6 digits the same dynamic truncation becomes 287082.
         assert_eq!(totp_code_for_step(secret, 59 / 30), "287082");
+    }
+
+    #[test]
+    fn two_factor_sessions_reset_after_mutex_poison() {
+        let sessions = TwoFactorSessions::new();
+        let pending = sessions.create_pending().expect("create pending session");
+        assert!(sessions.pending_exists(&pending));
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = sessions.inner.lock().expect("lock session store");
+            panic!("poison two-factor session store");
+        }));
+
+        assert!(!sessions.pending_exists(&pending));
+        let replacement = sessions
+            .create_pending()
+            .expect("create replacement session");
+        assert!(sessions.pending_exists(&replacement));
     }
 }
