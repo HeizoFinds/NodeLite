@@ -582,21 +582,21 @@ fn log_notice(level: NoticeLevel, message: &str) {
 /// 当 getrandom 失败(极少见,例如刚启动时内核熵不足),退化到基础时长本身,
 /// 这与未加 jitter 之前的行为等价,功能仍可用。
 fn reconnect_delay(attempt: u32) -> Duration {
-    let base_secs: u64 = match attempt {
-        0 => 1,
-        1 => 2,
-        2 => 4,
-        3 => 8,
-        4 => 16,
-        5 => 32,
-        _ => 60,
+    let (floor_secs, ceiling_secs): (u64, u64) = match attempt {
+        0 => (1, 5),
+        1 => (2, 10),
+        2 => (5, 20),
+        3 => (10, 40),
+        4 => (15, 60),
+        _ => (30, 120),
     };
-    let base_ms = base_secs.saturating_mul(1000);
-    let half = base_ms / 2;
+    let floor_ms = floor_secs.saturating_mul(1000);
+    let ceiling_ms = ceiling_secs.saturating_mul(1000);
+    let span_ms = ceiling_ms.saturating_sub(floor_ms);
     let jitter_ms = sample_random_u64()
-        .map(|value| value % base_ms)
-        .unwrap_or(0);
-    Duration::from_millis(half.saturating_add(jitter_ms))
+        .map(|value| value % span_ms.saturating_add(1))
+        .unwrap_or(span_ms);
+    Duration::from_millis(floor_ms.saturating_add(jitter_ms))
 }
 
 /// 抽取 8 字节系统随机数;失败时返回 `None`,调用方需要给出合理的回退。
@@ -865,29 +865,26 @@ mod tests {
 
     #[test]
     fn reconnect_delay_is_within_jitter_window_and_disperses() {
-        // 每次重连退避必须落在 [base * 0.5, base * 1.5) 内;
-        // 同时,N 次取样必须出现 >1 个不同结果,证明 jitter 真的在生效
-        // 而不是退化为常量。
-        let cases: &[(u32, u64)] = &[
-            (0, 1),
-            (1, 2),
-            (2, 4),
-            (3, 8),
-            (4, 16),
-            (5, 32),
-            (6, 60),
-            (1024, 60),
+        // 每次重连退避必须落在 [floor, ceiling] 内,并且 32 次取样不应全部相同。
+        // 这确保大规模节点同时掉线时,重连请求会被摊到更宽的时间带里。
+        let cases: &[(u32, u64, u64)] = &[
+            (0, 1, 5),
+            (1, 2, 10),
+            (2, 5, 20),
+            (3, 10, 40),
+            (4, 15, 60),
+            (5, 30, 120),
+            (1024, 30, 120),
         ];
-        for &(attempt, base_secs) in cases {
-            let base_ms = base_secs * 1000;
-            let lower = Duration::from_millis(base_ms / 2);
-            let upper = Duration::from_millis(base_ms / 2 + base_ms);
+        for &(attempt, floor_secs, ceiling_secs) in cases {
+            let lower = Duration::from_secs(floor_secs);
+            let upper = Duration::from_secs(ceiling_secs);
             let mut samples: HashSet<u128> = HashSet::new();
             for _ in 0..32 {
                 let delay = reconnect_delay(attempt);
                 assert!(
-                    delay >= lower && delay < upper,
-                    "attempt {attempt}: {delay:?} not in [{lower:?}, {upper:?})",
+                    delay >= lower && delay <= upper,
+                    "attempt {attempt}: {delay:?} not in [{lower:?}, {upper:?}]",
                 );
                 samples.insert(delay.as_millis());
             }
