@@ -1008,6 +1008,8 @@
       let latestOverview = null;
       let latestNodes = [];
       let refreshTimer = null;
+      let worldGeoJsonPromise = null;
+      let sparkHistoryRefreshToken = 0;
       let activeTab = "overview";
       let latestSettings = null;
       let pendingTwoFactorSetup = null;
@@ -1389,12 +1391,25 @@
       }
       async function loadWorldGeoJson() {
         if (cachedWorldGeoJson) return cachedWorldGeoJson;
-        const response = await fetch(WORLD_GEOJSON_URL, { cache: "force-cache", headers: { accept: "application/geo+json,application/json" } });
-        if (!response.ok) throw new Error(`${WORLD_GEOJSON_URL} -> ${response.status}`);
-        cachedWorldGeoJson = await response.json();
-        return cachedWorldGeoJson;
+        if (!worldGeoJsonPromise) {
+          worldGeoJsonPromise = fetch(WORLD_GEOJSON_URL, {
+            cache: "force-cache",
+            headers: { accept: "application/geo+json,application/json" }
+          }).then((response) => {
+            if (!response.ok) throw new Error(`${WORLD_GEOJSON_URL} -> ${response.status}`);
+            return response.json();
+          }).then((geoJson) => {
+            cachedWorldGeoJson = geoJson;
+            return geoJson;
+          }).catch((error) => {
+            worldGeoJsonPromise = null;
+            throw error;
+          });
+        }
+        return worldGeoJsonPromise;
       }
-      async function renderWorldDotMap() {
+
+      function paintWorldDotMap(maskPainter) {
         const canvas = document.getElementById("map-canvas");
         const ctx = canvas?.getContext("2d");
         if (!canvas || !ctx) return;
@@ -1407,12 +1422,7 @@
         if (!mask) return;
         mask.clearRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
         mask.fillStyle = "#fff";
-        try {
-          drawGeoJsonMask(mask, await loadWorldGeoJson());
-        } catch (error) {
-          console.warn("failed to load high precision map; using built-in fallback", error);
-          drawFallbackMask(mask);
-        }
+        maskPainter(mask);
         const pixels = mask.getImageData(0, 0, MAP_WIDTH, MAP_HEIGHT).data;
         ctx.clearRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
         ctx.fillStyle = mapDotColor();
@@ -1426,6 +1436,30 @@
           }
         }
         ctx.fill();
+      }
+
+      function renderWorldDotMap() {
+        if (cachedWorldGeoJson) {
+          paintWorldDotMap((mask) => drawGeoJsonMask(mask, cachedWorldGeoJson));
+          return;
+        }
+        paintWorldDotMap(drawFallbackMask);
+        void loadWorldGeoJson()
+          .then((geoJson) => {
+            paintWorldDotMap((mask) => drawGeoJsonMask(mask, geoJson));
+          })
+          .catch((error) => {
+            console.warn("failed to load high precision map; keeping built-in fallback", error);
+          });
+      }
+
+      function scheduleWorldDotMapRender() {
+        const task = () => { renderWorldDotMap(); };
+        if (typeof window.requestIdleCallback === "function") {
+          window.requestIdleCallback(task, { timeout: 800 });
+        } else {
+          window.requestAnimationFrame(task);
+        }
       }
 
       function renderMapDots(nodes) {
@@ -1456,21 +1490,53 @@
           .sort((left, right) => left[0] - right[0])
           .map(([, item]) => item.sum / item.count);
       }
-      async function refreshSparkHistories(nodes) {
+      function pruneSparkHistory(nodes) {
+        const liveNodeIds = new Set(
+          nodes.slice(0, HOME_SPARK_NODE_LIMIT).map((node) => node.identity.node_id)
+        );
+        for (const nodeId of sparkHistory.keys()) {
+          if (!liveNodeIds.has(nodeId)) sparkHistory.delete(nodeId);
+        }
+      }
+
+      async function refreshSparkHistories(nodes, token) {
         const limited = nodes.slice(0, HOME_SPARK_NODE_LIMIT);
-        await Promise.all(limited.map(async (node) => {
-          const nodeId = node.identity.node_id;
-          const params = new URLSearchParams({
-            window_hours: String(HOME_SPARK_WINDOW_HOURS),
-            max_points: String(HOME_SPARK_MAX_POINTS)
-          });
-          try {
-            const history = normalizeHistory(await fetchJson(`/api/nodes/${encodeURIComponent(nodeId)}/history?${params.toString()}`));
-            sparkHistory.set(nodeId, history);
-          } catch (error) {
-            console.warn("failed to refresh node spark history", nodeId, error);
+        const workerCount = Math.min(6, limited.length);
+        let nextIndex = 0;
+        const workers = Array.from({ length: workerCount }, async () => {
+          while (nextIndex < limited.length) {
+            const node = limited[nextIndex++];
+            const nodeId = node.identity.node_id;
+            const params = new URLSearchParams({
+              window_hours: String(HOME_SPARK_WINDOW_HOURS),
+              max_points: String(HOME_SPARK_MAX_POINTS)
+            });
+            try {
+              const history = normalizeHistory(await fetchJson(`/api/nodes/${encodeURIComponent(nodeId)}/history?${params.toString()}`));
+              if (token !== sparkHistoryRefreshToken) return;
+              sparkHistory.set(nodeId, history);
+            } catch (error) {
+              console.warn("failed to refresh node spark history", nodeId, error);
+            }
           }
-        }));
+        });
+        await Promise.all(workers);
+      }
+
+      function scheduleSparkHistoryRefresh(nodes) {
+        pruneSparkHistory(nodes);
+        const token = ++sparkHistoryRefreshToken;
+        const task = async () => {
+          await refreshSparkHistories(nodes, token);
+          if (token !== sparkHistoryRefreshToken) return;
+          renderNodes(latestNodes);
+        };
+
+        if (typeof window.requestIdleCallback === "function") {
+          window.requestIdleCallback(() => { void task(); }, { timeout: 1200 });
+        } else {
+          window.setTimeout(() => { void task(); }, 0);
+        }
       }
       function nodeSparkPoints(node) {
         const history = sparkHistory.get(node.identity.node_id);
@@ -2159,18 +2225,30 @@
           return;
         }
         try {
-          const [overview, nodes] = await Promise.all([
-            fetchJson("/api/overview"),
-            fetchJson("/api/nodes"),
+          const overviewPromise = fetchJson("/api/overview").then((overview) => {
+            latestOverview = overview;
+            renderStats(overview);
+            renderUpdated(overview);
+            return overview;
+          });
+          const nodesPromise = fetchJson("/api/nodes").then((nodes) => {
+            latestNodes = nodes;
+            renderMapDots(nodes);
+            renderMatrix(nodes);
+            renderNodes(nodes);
+            scheduleSparkHistoryRefresh(nodes);
+            return nodes;
+          });
+          const [overviewResult, nodesResult] = await Promise.allSettled([
+            overviewPromise,
+            nodesPromise,
           ]);
-          latestOverview = overview;
-          latestNodes = nodes;
-          await refreshSparkHistories(nodes);
-          renderStats(overview);
-          renderUpdated(overview);
-          renderMapDots(nodes);
-          renderMatrix(nodes);
-          renderNodes(nodes);
+          if (overviewResult.status === "rejected" && nodesResult.status === "rejected") {
+            throw overviewResult.reason;
+          }
+          if (nodesResult.status === "rejected") {
+            throw nodesResult.reason;
+          }
         } catch (error) {
           document.getElementById("nodes").innerHTML = `<div class="empty">${escapeHtml(t("index.dashboard_load_failed", { error: error.message }))}</div>`;
         } finally {
@@ -2202,7 +2280,7 @@
           renderNodes(latestNodes);
         });
         applyChrome();
-        renderWorldDotMap();
+        scheduleWorldDotMapRender();
         document.addEventListener("visibilitychange", () => {
           if (document.hidden) return;
           if (refreshTimer != null) { window.clearTimeout(refreshTimer); refreshTimer = null; }
