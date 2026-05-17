@@ -13,9 +13,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use axum::body::Bytes;
 use chrono::{DateTime, Utc};
 use nodelite_proto::{NodeIdentity, NodeSnapshot, NodeStatus, OverviewData, ServerConfig};
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 
 /// 运行中的 WebSocket 会话可接收的控制命令。
 pub(crate) enum SessionCommand {
@@ -54,6 +55,8 @@ pub struct SharedState {
     config: Arc<ServerConfig>,
     registry: Arc<RwLock<Registry>>,
     next_session_id: Arc<AtomicU64>,
+    view_revision: Arc<AtomicU64>,
+    api_cache: Arc<Mutex<ApiCache>>,
 }
 
 impl SharedState {
@@ -62,6 +65,8 @@ impl SharedState {
             config,
             registry: Arc::new(RwLock::new(Registry::default())),
             next_session_id: Arc::new(AtomicU64::new(1)),
+            view_revision: Arc::new(AtomicU64::new(1)),
+            api_cache: Arc::new(Mutex::new(ApiCache::default())),
         }
     }
 
@@ -76,6 +81,7 @@ impl SharedState {
         let now = Utc::now();
         let mut registry = self.registry.write().await;
         registry.register_node(session_id, identity, remote_ip, now);
+        self.bump_view_revision();
         session_id
     }
 
@@ -87,19 +93,29 @@ impl SharedState {
         snapshot: NodeSnapshot,
     ) -> Option<NodeStatus> {
         let mut registry = self.registry.write().await;
-        registry.update_snapshot(node_id, session_id, snapshot, Utc::now())
+        let status = registry.update_snapshot(node_id, session_id, snapshot, Utc::now());
+        if status.is_some() {
+            self.bump_view_revision();
+        }
+        status
     }
 
     /// 更新某节点的最新延迟值,语义同 `update_snapshot`。
     pub async fn update_latency(&self, node_id: &str, session_id: u64, latency_ms: u64) -> bool {
         let mut registry = self.registry.write().await;
-        registry.update_latency(node_id, session_id, latency_ms, Utc::now())
+        let updated = registry.update_latency(node_id, session_id, latency_ms, Utc::now());
+        if updated {
+            self.bump_view_revision();
+        }
+        updated
     }
 
     /// 标记某会话的连接已断开。如果当前活跃 ID 不再等于该会话,则什么也不做。
     pub async fn mark_disconnected(&self, node_id: &str, session_id: u64) {
         let mut registry = self.registry.write().await;
-        registry.mark_disconnected(node_id, session_id);
+        if registry.mark_disconnected(node_id, session_id) {
+            self.bump_view_revision();
+        }
     }
 
     /// 把在线会话的控制通道挂到节点上,供 HTTP 处理器向该节点下发命令。
@@ -116,10 +132,14 @@ impl SharedState {
     /// 把超时(超过 `stale_after_secs`)的节点统一标记为离线,返回受影响节点数。
     pub async fn mark_stale(&self) -> usize {
         let mut registry = self.registry.write().await;
-        registry.mark_stale(
+        let marked = registry.mark_stale(
             Duration::from_secs(self.config.stale_after_secs),
             Utc::now(),
-        )
+        );
+        if marked > 0 {
+            self.bump_view_revision();
+        }
+        marked
     }
 
     /// 判断给定 `session_id` 是否仍是该节点的当前会话。
@@ -160,17 +180,94 @@ impl SharedState {
         Ok(response_rx)
     }
 
-    /// 生成全局概览数据,用于仪表盘顶部的统计卡片。
-    pub async fn overview(&self) -> OverviewData {
-        let registry = self.registry.read().await;
-        registry.overview()
+    /// 返回缓存后的 `/api/overview` 响应体。只要对外节点视图没有变化,
+    /// 高频轮询就直接复用上一份序列化结果。
+    pub async fn overview_json_bytes(&self) -> Result<Bytes, serde_json::Error> {
+        self.cached_api_json_bytes(ApiBodyKind::Overview).await
+    }
+
+    /// 返回缓存后的 `/api/nodes` 响应体。命中缓存时跳过整表克隆和重复序列化。
+    pub async fn nodes_json_bytes(&self) -> Result<Bytes, serde_json::Error> {
+        self.cached_api_json_bytes(ApiBodyKind::Nodes).await
     }
 
     /// 启动时从磁盘快照恢复状态,所有节点都视为离线直至首次心跳到达。
     pub async fn restore_statuses(&self, statuses: Vec<NodeStatus>) {
         let mut registry = self.registry.write().await;
         registry.restore_statuses(statuses);
+        self.bump_view_revision();
     }
+
+    fn bump_view_revision(&self) {
+        self.view_revision.fetch_add(1, Ordering::Relaxed);
+    }
+
+    async fn cached_api_json_bytes(
+        &self,
+        kind: ApiBodyKind,
+    ) -> Result<Bytes, serde_json::Error> {
+        let revision = self.view_revision.load(Ordering::Relaxed);
+        {
+            let cache = self.api_cache.lock().await;
+            if cache.revision == revision
+                && let Some(body) = cache.body(kind)
+            {
+                return Ok(body);
+            }
+        }
+
+        let (nodes_body, overview_body) = {
+            let registry = self.registry.read().await;
+            let statuses = registry.list_statuses();
+            let overview = registry.overview_from_statuses(&statuses);
+            (
+                Bytes::from(serde_json::to_vec(&statuses)?),
+                Bytes::from(serde_json::to_vec(&overview)?),
+            )
+        };
+
+        let selected = match kind {
+            ApiBodyKind::Nodes => nodes_body.clone(),
+            ApiBodyKind::Overview => overview_body.clone(),
+        };
+
+        if self.view_revision.load(Ordering::Relaxed) == revision {
+            let mut cache = self.api_cache.lock().await;
+            *cache = ApiCache::with_bodies(revision, nodes_body, overview_body);
+        }
+
+        Ok(selected)
+    }
+}
+
+#[derive(Debug, Default)]
+struct ApiCache {
+    revision: u64,
+    nodes_json: Option<Bytes>,
+    overview_json: Option<Bytes>,
+}
+
+impl ApiCache {
+    fn with_bodies(revision: u64, nodes_json: Bytes, overview_json: Bytes) -> Self {
+        Self {
+            revision,
+            nodes_json: Some(nodes_json),
+            overview_json: Some(overview_json),
+        }
+    }
+
+    fn body(&self, kind: ApiBodyKind) -> Option<Bytes> {
+        match kind {
+            ApiBodyKind::Nodes => self.nodes_json.clone(),
+            ApiBodyKind::Overview => self.overview_json.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ApiBodyKind {
+    Nodes,
+    Overview,
 }
 
 #[derive(Debug, Default)]
@@ -256,15 +353,17 @@ impl Registry {
         true
     }
 
-    fn mark_disconnected(&mut self, node_id: &str, session_id: u64) {
+    fn mark_disconnected(&mut self, node_id: &str, session_id: u64) -> bool {
         let Some(entry) = self.nodes.get_mut(node_id) else {
-            return;
+            return false;
         };
         if entry.active_session_id == Some(session_id) {
             entry.active_session_id = None;
             entry.status.online = false;
             entry.control_tx = None;
+            return true;
         }
+        false
     }
 
     fn attach_session_control(
@@ -339,8 +438,13 @@ impl Registry {
         entry.control_tx.clone()
     }
 
+    #[cfg(test)]
     fn overview(&self) -> OverviewData {
         let statuses = self.list_statuses();
+        self.overview_from_statuses(&statuses)
+    }
+
+    fn overview_from_statuses(&self, statuses: &[NodeStatus]) -> OverviewData {
         let total_nodes = statuses.len();
         let online_nodes = statuses.iter().filter(|status| status.online).count();
         let offline_nodes = total_nodes.saturating_sub(online_nodes);
@@ -367,17 +471,21 @@ impl Registry {
             .filter_map(|snapshot| snapshot.network.tx_bytes_per_sec)
             .fold(0.0, sum_finite_f64);
 
-        let latencies: Vec<u64> = statuses
+        let mut latency_total = 0_u128;
+        let mut latency_samples = 0_usize;
+        for latency in statuses
             .iter()
             .filter(|status| status.online)
             .filter_map(|status| status.latency_ms)
-            .collect();
+        {
+            latency_total = latency_total.saturating_add(latency as u128);
+            latency_samples += 1;
+        }
         // 用 u128 累加并取平均值,避免在罕见情况下(极大延迟、海量节点)
         // 触发 u64 加法溢出 —— debug 构建会 panic,release 构建会回绕成
         // 异常小的"平均延迟",污染仪表盘。
-        let average_latency_ms = (!latencies.is_empty()).then(|| {
-            let total: u128 = latencies.iter().map(|value| *value as u128).sum();
-            total as f64 / latencies.len() as f64
+        let average_latency_ms = (latency_samples > 0).then(|| {
+            latency_total as f64 / latency_samples as f64
         });
 
         OverviewData {
@@ -423,14 +531,17 @@ fn sum_finite_f64(total: f64, value: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+    use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use chrono::{Duration as ChronoDuration, TimeZone, Utc};
-    use nodelite_proto::{LoadAverage, MemoryUsage, NodeSnapshot};
+    use nodelite_proto::{LoadAverage, MemoryUsage, NodeSnapshot, ReadonlyAuthConfig, ServerConfig, WsConfig};
     use nodelite_proto::{NetworkCounters, percentage};
     use tokio::sync::mpsc;
 
-    use super::{Registry, SessionCommand};
+    use super::{Registry, SessionCommand, SharedState};
     use nodelite_proto::NodeIdentity;
 
     #[test]
@@ -599,6 +710,31 @@ mod tests {
         assert!(registry.session_control("hk-01").is_none());
     }
 
+    #[tokio::test]
+    async fn cached_api_json_invalidates_after_visible_status_change() {
+        let shared = SharedState::new(Arc::new(sample_config()));
+        let session_id = shared.register_node(sample_identity(), Some("198.51.100.10".to_string())).await;
+
+        let first_nodes = shared.nodes_json_bytes().await.expect("nodes json");
+        let first_overview = shared.overview_json_bytes().await.expect("overview json");
+
+        shared.mark_disconnected("hk-01", session_id).await;
+
+        let second_nodes = shared.nodes_json_bytes().await.expect("nodes json after disconnect");
+        let second_overview = shared
+            .overview_json_bytes()
+            .await
+            .expect("overview json after disconnect");
+
+        assert_ne!(first_nodes, second_nodes);
+        assert_ne!(first_overview, second_overview);
+        assert!(
+            std::str::from_utf8(&second_nodes)
+                .expect("utf8")
+                .contains("\"online\":false")
+        );
+    }
+
     fn sample_identity() -> NodeIdentity {
         NodeIdentity {
             node_id: "hk-01".to_string(),
@@ -611,6 +747,38 @@ mod tests {
             agent_version: "0.1.0".to_string(),
             boot_time: None,
             tags: Vec::new(),
+        }
+    }
+
+    fn sample_config() -> ServerConfig {
+        ServerConfig {
+            listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+            public_base_url: "http://127.0.0.1:8080".to_string(),
+            insecure_allow_http: false,
+            readonly_auth: Some(ReadonlyAuthConfig {
+                username: "viewer".to_string(),
+                password: "secret".to_string(),
+                enable_2fa: false,
+                totp_secret: None,
+            }),
+            ws: WsConfig {
+                max_total_connections: 128,
+                max_connections_per_ip: 64,
+                auth_fail_window_secs: 300,
+                auth_fail_max_attempts: 12,
+                auth_block_secs: 900,
+            },
+            node_registry_path: PathBuf::from("/tmp/nodelite-test-registry.json"),
+            history_db_path: PathBuf::from("/tmp/nodelite-test-history.sqlite3"),
+            snapshot_path: PathBuf::from("/tmp/nodelite-test-snapshot.json"),
+            stale_after_secs: 5,
+            ping_interval_secs: 60,
+            max_message_bytes: 64 * 1024,
+            refresh_interval_secs: 5,
+            ignored_filesystems: vec!["tmpfs".to_string(), "devtmpfs".to_string()],
+            agent_release_base_url: None,
+            agent_release_sha256_x86_64: None,
+            agent_release_sha256_aarch64: None,
         }
     }
 

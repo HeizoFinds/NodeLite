@@ -515,13 +515,41 @@ fn lowercase_hex_nibble(byte: u8) -> Option<u8> {
 }
 
 /// 仪表盘顶部的总览数据。
-pub(crate) async fn overview(State(state): State<AppState>) -> impl IntoResponse {
-    Json(state.shared.overview().await)
+pub(crate) async fn overview(State(state): State<AppState>) -> Response {
+    match state.shared.overview_json_bytes().await {
+        Ok(body) => (
+            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+            body,
+        )
+            .into_response(),
+        Err(error) => {
+            error!(error = ?error, "failed to serialize overview response");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to render overview",
+            )
+                .into_response()
+        }
+    }
 }
 
 /// 所有节点的最新状态。
-pub(crate) async fn nodes(State(state): State<AppState>) -> impl IntoResponse {
-    Json(state.shared.list_statuses().await)
+pub(crate) async fn nodes(State(state): State<AppState>) -> Response {
+    match state.shared.nodes_json_bytes().await {
+        Ok(body) => (
+            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+            body,
+        )
+            .into_response(),
+        Err(error) => {
+            error!(error = ?error, "failed to serialize nodes response");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to render nodes",
+            )
+                .into_response()
+        }
+    }
 }
 
 /// 单个节点的最新状态;不存在时返回 404。
