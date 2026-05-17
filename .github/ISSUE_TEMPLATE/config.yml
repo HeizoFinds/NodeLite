@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 讨论区
+    url: https://github.com/XiNian-dada/NodeLite/discussions
+    about: 提问、分享想法或讨论项目
+  - name: 📖 文档
+    url: https://github.com/XiNian-dada/NodeLite/blob/main/README.md
+    about: 查看项目文档和使用指南
+  - name: 🔒 私密安全报告
+    url: https://github.com/XiNian-dada/NodeLite/security/advisories/new
+    about: 报告严重安全漏洞（私密）

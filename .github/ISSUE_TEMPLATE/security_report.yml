@@ -1,0 +1,106 @@
+name: 安全问题报告
+description: 报告安全漏洞或安全相关问题
+title: "[Security] "
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **重要提示**：如果这是一个严重的安全漏洞，请不要在公开 issue 中报告。
+        请通过私密方式联系维护者。
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 安全问题描述
+      description: 清晰描述这个安全问题
+      placeholder: 发现了一个潜在的安全问题...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: 严重程度
+      description: 你认为这个问题的严重程度如何？
+      options:
+        - P0 - 严重：可导致数据泄露或系统被控制
+        - P1 - 高危：可能导致权限提升或拒绝服务
+        - P2 - 中危：需要特定条件才能利用
+        - P3 - 低危：理论风险或最佳实践建议
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: 安全类别
+      description: 这属于哪类安全问题？
+      options:
+        - 认证/授权
+        - 注入攻击 (SQL/命令/XSS)
+        - 加密/密码学
+        - 拒绝服务 (DoS)
+        - 信息泄露
+        - 配置安全
+        - 依赖漏洞
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响范围
+      description: 这个问题会影响什么？
+      placeholder: |
+        - 影响的组件：Server / Agent / Web UI
+        - 影响的版本：v0.1.0 及以上
+        - 攻击者需要的权限：无 / 普通用户 / 管理员
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤（如适用）
+      description: 如何复现这个安全问题？
+      placeholder: |
+        1. 配置服务端...
+        2. 发送请求...
+        3. 观察到...
+
+  - type: textarea
+    id: mitigation
+    attributes:
+      label: 临时缓解措施
+      description: 在修复前，用户可以采取什么措施？
+      placeholder: |
+        - 限制网络访问
+        - 修改配置...
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 修复建议
+      description: 你对修复这个问题有什么建议？
+      placeholder: 建议使用...
+
+  - type: checkboxes
+    id: disclosure
+    attributes:
+      label: 负责任披露
+      description: 请确认你理解负责任披露原则
+      options:
+        - label: 我理解这个问题可能影响现有用户的安全
+          required: true
+        - label: 我同意给维护者合理的时间来修复这个问题
+          required: true
+        - label: 我不会在修复前公开披露技术细节
+          required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: 补充信息
+      description: 其他任何有助于理解和修复这个问题的信息
