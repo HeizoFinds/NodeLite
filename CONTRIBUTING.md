@@ -263,6 +263,40 @@ PR 会经过以下检查：
 3. 创建 git tag
 4. 推送 tag 触发 CI 发布
 
+### 更新 CHANGELOG.md
+
+每次提交如果涉及用户可见的变更，请在 CHANGELOG.md 的 `[Unreleased]` 部分添加说明。
+
+发布新版本时：
+1. 将 `[Unreleased]` 内容移到新版本号下
+2. 更新版本号和日期
+3. 创建 git tag
+
+**CHANGELOG 格式：**
+```markdown
+## [Unreleased]
+
+### Added
+- 新增功能
+
+### Changed
+- 功能变更
+
+### Deprecated
+- 即将废弃的功能
+
+### Removed
+- 移除的功能
+
+### Fixed
+- Bug 修复
+
+### Security
+- 安全修复
+```
+
+遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 格式。
+
 ## 获取帮助
 
 - 📖 阅读 [README.md](README.md)
