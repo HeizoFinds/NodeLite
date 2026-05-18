@@ -20,7 +20,10 @@ use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt
 use argon2::{Algorithm, Argon2, Params, Version};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use getrandom::fill as fill_random;
-use nodelite_proto::{MAX_NODE_TAG_BYTES, MAX_NODE_TAGS, NodeIdentity};
+use nodelite_proto::{
+    MAX_NODE_TAG_BYTES, MAX_NODE_TAGS, NodeIdentity, normalize_string_list, validate_identifier,
+    validate_non_empty, validate_tag_list,
+};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -334,7 +337,7 @@ pub async fn issue_node(path: &Path, request: IssueNodeRequest) -> Result<IssueN
         validate_non_empty("node_label", node_label)?;
     }
     let normalized_tags = normalize_string_list(request.tags.clone());
-    validate_tag_list("tags", &normalized_tags)?;
+    validate_tag_list("tags", &normalized_tags, MAX_NODE_TAGS, MAX_NODE_TAG_BYTES)?;
 
     let request = request.clone();
     let (result, _) = mutate_registry_file(path, move |file| {
@@ -897,7 +900,7 @@ fn validate_registered_node(node: &RegisteredNode) -> Result<()> {
     if node.token_hash.is_empty() && node.token.is_empty() {
         bail!("node.token_hash is empty");
     }
-    validate_tag_list("node.tags", &node.tags)?;
+    validate_tag_list("node.tags", &node.tags, MAX_NODE_TAGS, MAX_NODE_TAG_BYTES)?;
     Ok(())
 }
 
@@ -1090,51 +1093,12 @@ fn validate_runtime_identity(identity: &NodeIdentity) -> Result<()> {
     validate_non_empty("identity.agent_version", &identity.agent_version)?;
     validate_non_empty("identity.hostname", &identity.hostname)?;
     validate_non_empty("identity.os", &identity.os)?;
-    validate_tag_list("identity.tags", &identity.tags)?;
-    Ok(())
-}
-
-fn validate_identifier(field: &str, value: &str) -> Result<()> {
-    validate_non_empty(field, value)?;
-    if value.len() > 128 {
-        bail!("{field} must be <= 128 characters");
-    }
-    if !value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-    {
-        bail!("{field} must use only ASCII letters, numbers, '-', '_' or '.'");
-    }
-    Ok(())
-}
-
-fn validate_non_empty(field: &str, value: &str) -> Result<()> {
-    if value.trim().is_empty() {
-        bail!("{field} must not be empty");
-    }
-    Ok(())
-}
-
-fn normalize_string_list(values: Vec<String>) -> Vec<String> {
-    let mut values: Vec<String> = values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect();
-    values.sort();
-    values.dedup();
-    values
-}
-
-fn validate_tag_list(field: &str, values: &[String]) -> Result<()> {
-    if values.len() > MAX_NODE_TAGS {
-        bail!("{field} must contain at most {MAX_NODE_TAGS} tags");
-    }
-    for (index, value) in values.iter().enumerate() {
-        if value.len() > MAX_NODE_TAG_BYTES {
-            bail!("{field}[{index}] must be <= {MAX_NODE_TAG_BYTES} bytes");
-        }
-    }
+    validate_tag_list(
+        "identity.tags",
+        &identity.tags,
+        MAX_NODE_TAGS,
+        MAX_NODE_TAG_BYTES,
+    )?;
     Ok(())
 }
 

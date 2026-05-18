@@ -8,6 +8,7 @@ pub mod config;
 pub mod message;
 pub mod model;
 pub mod netutil;
+pub mod validation;
 
 pub use config::{
     AgentConfig, ConfigError, DEFAULT_HISTORY_RETENTION_HOURS, DEFAULT_HISTORY_WRITE_INTERVAL_SECS,
@@ -26,3 +27,7 @@ pub use model::{
     NodeStatus, OverviewData, percentage,
 };
 pub use netutil::{host_is_local, uses_insecure_remote_url};
+pub use validation::{
+    ValidationError, normalize_string_list, validate_identifier, validate_non_empty,
+    validate_tag_list,
+};

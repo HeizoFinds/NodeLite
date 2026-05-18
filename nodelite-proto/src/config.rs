@@ -16,6 +16,10 @@ use serde::{Deserialize, Serialize};
 use url::{Url, form_urlencoded};
 
 use crate::netutil::uses_insecure_remote_url;
+use crate::validation::{
+    ValidationError, normalize_string_list, validate_identifier, validate_non_empty,
+    validate_tag_list,
+};
 
 /// 节点超时阈值:超过该时长未收到任何报文即视为离线。
 pub const DEFAULT_STALE_AFTER_SECS: u64 = 20;
@@ -85,6 +89,12 @@ impl std::fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+impl From<ValidationError> for ConfigError {
+    fn from(error: ValidationError) -> Self {
+        Self::new(error.to_string())
+    }
+}
 
 /// Server 启动需要的全部配置。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -326,14 +336,66 @@ struct RawAgentSection {
     insecure_transport_warn_interval_secs: u64,
 }
 
+struct ValidatedInstall {
+    agent_release_base_url: Option<String>,
+    agent_release_sha256_x86_64: Option<String>,
+    agent_release_sha256_aarch64: Option<String>,
+}
+
 impl RawServerConfigFile {
     /// 集中执行所有跨字段、跨小节的语义校验。
     fn validate(self) -> Result<ServerConfig, ConfigError> {
-        let listen = self
-            .server
+        let listen = self.parse_listen()?;
+        self.validate_public_base_url()?;
+        let install = self.validate_install()?;
+        let readonly_auth = self.validate_auth(&listen)?;
+        self.validate_server_limits()?;
+        self.validate_ws_limits()?;
+        self.validate_ui_limits()?;
+
+        Ok(ServerConfig {
+            listen,
+            public_base_url: self.server.public_base_url,
+            insecure_allow_http: self.server.insecure_allow_http,
+            readonly_auth,
+            ws: WsConfig {
+                max_total_connections: self.ws.max_total_connections,
+                max_connections_per_ip: self.ws.max_connections_per_ip,
+                auth_fail_window_secs: self.ws.auth_fail_window_secs,
+                auth_fail_max_attempts: self.ws.auth_fail_max_attempts,
+                auth_block_secs: self.ws.auth_block_secs,
+            },
+            node_registry_path: self.server.node_registry_path,
+            history_db_path: self.server.history_db_path,
+            snapshot_path: self.server.snapshot_path,
+            stale_after_secs: self.server.stale_after_secs,
+            ping_interval_secs: self.server.ping_interval_secs,
+            max_message_bytes: self.server.max_message_bytes,
+            refresh_interval_secs: self.ui.refresh_interval_secs,
+            ignored_filesystems: normalize_string_list(self.filters.ignored_filesystems),
+            agent_release_base_url: install.agent_release_base_url,
+            agent_release_sha256_x86_64: install.agent_release_sha256_x86_64,
+            agent_release_sha256_aarch64: install.agent_release_sha256_aarch64,
+            hello_timeout_secs: self.server.hello_timeout_secs,
+            max_outstanding_pings: self.server.max_outstanding_pings,
+            insecure_transport_warn_interval_secs: self
+                .server
+                .insecure_transport_warn_interval_secs,
+            max_sanitized_disks: self.server.max_sanitized_disks,
+            max_sanitized_string_bytes: self.server.max_sanitized_string_bytes,
+            metric_anomaly_session_limit: self.server.metric_anomaly_session_limit,
+            sqlite_busy_timeout_secs: self.server.sqlite_busy_timeout_secs,
+        })
+    }
+
+    fn parse_listen(&self) -> Result<SocketAddr, ConfigError> {
+        self.server
             .listen
             .parse::<SocketAddr>()
-            .map_err(|error| ConfigError::new(format!("invalid server.listen: {error}")))?;
+            .map_err(|error| ConfigError::new(format!("invalid server.listen: {error}")))
+    }
+
+    fn validate_public_base_url(&self) -> Result<(), ConfigError> {
         validate_url(
             "server.public_base_url",
             &self.server.public_base_url,
@@ -346,6 +408,10 @@ impl RawServerConfigFile {
                 "server.insecure_allow_http = true is required when server.public_base_url uses remote http://",
             ));
         }
+        Ok(())
+    }
+
+    fn validate_install(&self) -> Result<ValidatedInstall, ConfigError> {
         if let Some(agent_release_base_url) = self.install.agent_release_base_url.as_deref() {
             validate_url(
                 "install.agent_release_base_url",
@@ -353,14 +419,19 @@ impl RawServerConfigFile {
                 &["http", "https"],
             )?;
         }
+
         let agent_release_sha256_x86_64 = self
             .install
             .agent_release_sha256_x86_64
-            .map(|value| value.trim().to_string());
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_string);
         let agent_release_sha256_aarch64 = self
             .install
             .agent_release_sha256_aarch64
-            .map(|value| value.trim().to_string());
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_string);
         if let Some(sha256) = agent_release_sha256_x86_64.as_deref() {
             validate_sha256("install.agent_release_sha256_x86_64", sha256)?;
         }
@@ -374,11 +445,24 @@ impl RawServerConfigFile {
                 "install.agent_release_sha256_x86_64 and install.agent_release_sha256_aarch64 are required when install.agent_release_base_url is configured",
             ));
         }
+
+        Ok(ValidatedInstall {
+            agent_release_base_url: self.install.agent_release_base_url.clone(),
+            agent_release_sha256_x86_64,
+            agent_release_sha256_aarch64,
+        })
+    }
+
+    fn validate_auth(
+        &self,
+        listen: &SocketAddr,
+    ) -> Result<Option<ReadonlyAuthConfig>, ConfigError> {
         let enable_2fa = self.auth.enable_2fa;
         let totp_secret = self
             .auth
             .totp_secret
-            .map(|value| normalize_totp_secret(&value))
+            .as_deref()
+            .map(normalize_totp_secret)
             .filter(|value| !value.is_empty());
         if enable_2fa && self.auth.username.is_none() {
             return Err(ConfigError::new(
@@ -390,47 +474,69 @@ impl RawServerConfigFile {
                 "auth.totp_secret is required when auth.enable_2fa = true",
             ));
         }
-        if enable_2fa && let Some(secret) = totp_secret.as_deref() {
-            validate_totp_secret("auth.totp_secret", secret)?;
+        if enable_2fa {
+            self.validate_https_for_two_factor()?;
+            if let Some(secret) = totp_secret.as_deref() {
+                validate_totp_secret("auth.totp_secret", secret)?;
+            }
         }
-        // 没有 HTTPS,2FA 是个剧场:Cookie 与 TOTP code 都会在明文链路上传输,
-        // 攻击者一次嗅探即可越过二次验证。所以 enable_2fa = true 时,
-        // 必须使用 https:// 的 public_base_url —— 即便 listen 是回环地址,
-        // 也得借此提醒部署人员前面必须有 TLS 终结。
-        if enable_2fa && !self.server.public_base_url.starts_with("https://") {
+
+        let readonly_auth = self.build_readonly_auth(enable_2fa, totp_secret)?;
+        if readonly_auth.is_none() && !listen.ip().is_loopback() {
+            return Err(ConfigError::new(
+                "auth.username and auth.password are required when server.listen is not loopback",
+            ));
+        }
+        Ok(readonly_auth)
+    }
+
+    fn validate_https_for_two_factor(&self) -> Result<(), ConfigError> {
+        if !self.server.public_base_url.starts_with("https://") {
             return Err(ConfigError::new(
                 "server.public_base_url must use https:// when auth.enable_2fa = true",
             ));
         }
+        Ok(())
+    }
 
-        // 用户名与密码必须成对出现:任意一个单独存在都视为配置错误。
-        let readonly_auth = match (
-            self.auth.username.map(|value| value.trim().to_string()),
-            self.auth.password.map(|value| value.trim().to_string()),
+    fn build_readonly_auth(
+        &self,
+        enable_2fa: bool,
+        totp_secret: Option<String>,
+    ) -> Result<Option<ReadonlyAuthConfig>, ConfigError> {
+        match (
+            self.auth
+                .username
+                .as_deref()
+                .map(str::trim)
+                .map(str::to_string),
+            self.auth
+                .password
+                .as_deref()
+                .map(str::trim)
+                .map(str::to_string),
         ) {
             (Some(username), Some(password)) => {
                 validate_non_empty("auth.username", &username)?;
                 validate_non_empty("auth.password", &password)?;
-                Some(ReadonlyAuthConfig {
+                Ok(Some(ReadonlyAuthConfig {
                     username,
                     password,
                     enable_2fa,
                     totp_secret,
-                })
+                }))
             }
-            (None, None) => None,
-            (Some(_), None) => {
-                return Err(ConfigError::new(
-                    "auth.password must be set when auth.username is configured",
-                ));
-            }
-            (None, Some(_)) => {
-                return Err(ConfigError::new(
-                    "auth.username must be set when auth.password is configured",
-                ));
-            }
-        };
+            (None, None) => Ok(None),
+            (Some(_), None) => Err(ConfigError::new(
+                "auth.password must be set when auth.username is configured",
+            )),
+            (None, Some(_)) => Err(ConfigError::new(
+                "auth.username must be set when auth.password is configured",
+            )),
+        }
+    }
 
+    fn validate_server_limits(&self) -> Result<(), ConfigError> {
         if self.server.stale_after_secs < 5 {
             return Err(ConfigError::new(
                 "server.stale_after_secs must be at least 5 seconds",
@@ -446,6 +552,10 @@ impl RawServerConfigFile {
                 "server.max_message_bytes must be at least 1024 bytes",
             ));
         }
+        Ok(())
+    }
+
+    fn validate_ws_limits(&self) -> Result<(), ConfigError> {
         if self.ws.max_total_connections < 1 {
             return Err(ConfigError::new(
                 "ws.max_total_connections must be at least 1",
@@ -476,51 +586,16 @@ impl RawServerConfigFile {
                 "ws.auth_block_secs must be at least 1 second",
             ));
         }
+        Ok(())
+    }
+
+    fn validate_ui_limits(&self) -> Result<(), ConfigError> {
         if self.ui.refresh_interval_secs < 1 {
             return Err(ConfigError::new(
                 "ui.refresh_interval_secs must be at least 1 second",
             ));
         }
-        // 监听非回环地址时必须配置只读认证,防止公网暴露。
-        if readonly_auth.is_none() && !listen.ip().is_loopback() {
-            return Err(ConfigError::new(
-                "auth.username and auth.password are required when server.listen is not loopback",
-            ));
-        }
-
-        Ok(ServerConfig {
-            listen,
-            public_base_url: self.server.public_base_url,
-            insecure_allow_http: self.server.insecure_allow_http,
-            readonly_auth,
-            ws: WsConfig {
-                max_total_connections: self.ws.max_total_connections,
-                max_connections_per_ip: self.ws.max_connections_per_ip,
-                auth_fail_window_secs: self.ws.auth_fail_window_secs,
-                auth_fail_max_attempts: self.ws.auth_fail_max_attempts,
-                auth_block_secs: self.ws.auth_block_secs,
-            },
-            node_registry_path: self.server.node_registry_path,
-            history_db_path: self.server.history_db_path,
-            snapshot_path: self.server.snapshot_path,
-            stale_after_secs: self.server.stale_after_secs,
-            ping_interval_secs: self.server.ping_interval_secs,
-            max_message_bytes: self.server.max_message_bytes,
-            refresh_interval_secs: self.ui.refresh_interval_secs,
-            ignored_filesystems: normalize_string_list(self.filters.ignored_filesystems),
-            agent_release_base_url: self.install.agent_release_base_url,
-            agent_release_sha256_x86_64,
-            agent_release_sha256_aarch64,
-            hello_timeout_secs: self.server.hello_timeout_secs,
-            max_outstanding_pings: self.server.max_outstanding_pings,
-            insecure_transport_warn_interval_secs: self
-                .server
-                .insecure_transport_warn_interval_secs,
-            max_sanitized_disks: self.server.max_sanitized_disks,
-            max_sanitized_string_bytes: self.server.max_sanitized_string_bytes,
-            metric_anomaly_session_limit: self.server.metric_anomaly_session_limit,
-            sqlite_busy_timeout_secs: self.server.sqlite_busy_timeout_secs,
-        })
+        Ok(())
     }
 }
 
@@ -564,32 +639,6 @@ impl RawAgentConfigFile {
     }
 }
 
-fn validate_non_empty(field: &str, value: &str) -> Result<(), ConfigError> {
-    if value.trim().is_empty() {
-        return Err(ConfigError::new(format!("{field} must not be empty")));
-    }
-    Ok(())
-}
-
-/// 校验"标识符"风格的字段:非空、长度可控、仅含 ASCII 字母数字与 `-_.`。
-fn validate_identifier(field: &str, value: &str) -> Result<(), ConfigError> {
-    validate_non_empty(field, value)?;
-    if value.len() > 128 {
-        return Err(ConfigError::new(format!(
-            "{field} must be <= 128 characters"
-        )));
-    }
-    if !value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-    {
-        return Err(ConfigError::new(format!(
-            "{field} must use only ASCII letters, numbers, '-', '_' or '.'"
-        )));
-    }
-    Ok(())
-}
-
 /// 校验 URL 字段:能被解析,并且采用了允许的协议方案。
 fn validate_url(field: &str, value: &str, schemes: &[&str]) -> Result<(), ConfigError> {
     let parsed =
@@ -603,38 +652,10 @@ fn validate_url(field: &str, value: &str, schemes: &[&str]) -> Result<(), Config
     Ok(())
 }
 
-/// 规范化字符串列表:trim 后去空、排序并去重,确保比较与持久化稳定。
-fn normalize_string_list(values: Vec<String>) -> Vec<String> {
-    let mut values: Vec<String> = values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect();
-    values.sort();
-    values.dedup();
-    values
-}
-
 fn normalize_tags(field: &str, values: Vec<String>) -> Result<Vec<String>, ConfigError> {
     let values = normalize_string_list(values);
-    validate_tag_list(field, &values)?;
+    validate_tag_list(field, &values, MAX_NODE_TAGS, MAX_NODE_TAG_BYTES)?;
     Ok(values)
-}
-
-fn validate_tag_list(field: &str, values: &[String]) -> Result<(), ConfigError> {
-    if values.len() > MAX_NODE_TAGS {
-        return Err(ConfigError::new(format!(
-            "{field} must contain at most {MAX_NODE_TAGS} tags"
-        )));
-    }
-    for (index, value) in values.iter().enumerate() {
-        if value.len() > MAX_NODE_TAG_BYTES {
-            return Err(ConfigError::new(format!(
-                "{field}[{index}] must be <= {MAX_NODE_TAG_BYTES} bytes"
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// 校验 SHA-256 摘要:长度必须是 64 个十六进制字符。
