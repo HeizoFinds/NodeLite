@@ -1,0 +1,420 @@
+use std::path::PathBuf;
+
+use super::{
+    DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_WS_AUTH_BLOCK_SECS, DEFAULT_WS_AUTH_FAIL_MAX_ATTEMPTS,
+    DEFAULT_WS_AUTH_FAIL_WINDOW_SECS, DEFAULT_WS_MAX_CONNECTIONS_PER_IP,
+    DEFAULT_WS_MAX_TOTAL_CONNECTIONS, MAX_NODE_TAG_BYTES, parse_agent_config, parse_server_config,
+};
+
+#[test]
+fn parses_server_config_with_defaults() {
+    let config = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "http://127.0.0.1:8080"
+        "#,
+    )
+    .expect("server config should parse");
+
+    assert_eq!(config.listen.to_string(), "127.0.0.1:8080");
+    assert!(!config.insecure_allow_http);
+    assert_eq!(config.readonly_auth, None);
+    assert_eq!(config.max_message_bytes, DEFAULT_MAX_MESSAGE_BYTES);
+    assert_eq!(
+        config.ws.max_total_connections,
+        DEFAULT_WS_MAX_TOTAL_CONNECTIONS
+    );
+    assert_eq!(
+        config.ws.max_connections_per_ip,
+        DEFAULT_WS_MAX_CONNECTIONS_PER_IP
+    );
+    assert_eq!(
+        config.ws.auth_fail_window_secs,
+        DEFAULT_WS_AUTH_FAIL_WINDOW_SECS
+    );
+    assert_eq!(
+        config.ws.auth_fail_max_attempts,
+        DEFAULT_WS_AUTH_FAIL_MAX_ATTEMPTS
+    );
+    assert_eq!(config.ws.auth_block_secs, DEFAULT_WS_AUTH_BLOCK_SECS);
+    assert_eq!(
+        config.node_registry_path,
+        PathBuf::from("./config/server.json")
+    );
+    assert_eq!(
+        config.ignored_filesystems,
+        vec!["devtmpfs", "overlay", "tmpfs"]
+    );
+}
+
+#[test]
+fn rejects_invalid_server_listen_address() {
+    let error = parse_server_config(
+        r#"
+        [server]
+        listen = "oops"
+        public_base_url = "http://127.0.0.1:8080"
+        "#,
+    )
+    .expect_err("invalid config should fail");
+
+    assert!(error.to_string().contains("server.listen"));
+}
+
+#[test]
+fn rejects_invalid_agent_server_scheme() {
+    let error = parse_agent_config(
+        r#"
+        [agent]
+        node_id = "hk-01"
+        node_label = "Hong Kong 01"
+        server = "http://127.0.0.1:8080/ws"
+        token = "token"
+        "#,
+    )
+    .expect_err("invalid agent config should fail");
+
+    assert!(error.to_string().contains("agent.server"));
+}
+
+#[test]
+fn parses_agent_config() {
+    let config = parse_agent_config(
+        r#"
+        [agent]
+        node_id = "hk-01"
+        node_label = "Hong Kong 01"
+        server = "ws://127.0.0.1:8080/ws"
+        token = "token"
+        report_interval_secs = 7
+        hostname_override = "hk-01.internal"
+        tags = [" edge ", "apac"]
+        "#,
+    )
+    .expect("agent config should parse");
+
+    assert_eq!(config.node_id, "hk-01");
+    assert_eq!(config.report_interval_secs, 7);
+    assert_eq!(config.tags, vec!["apac", "edge"]);
+}
+
+#[test]
+fn rejects_agent_config_with_too_many_tags() {
+    let tags = (0..1000)
+        .map(|index| format!("\"tag-{index}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let input = format!(
+        r#"
+        [agent]
+        node_id = "hk-01"
+        node_label = "Hong Kong 01"
+        server = "ws://127.0.0.1:8080/ws"
+        token = "token"
+        tags = [{tags}]
+        "#
+    );
+
+    let error = parse_agent_config(&input).expect_err("too many tags should fail");
+    assert!(error.to_string().contains("agent.tags"));
+}
+
+#[test]
+fn rejects_agent_config_with_oversized_tag() {
+    let oversized = "x".repeat(MAX_NODE_TAG_BYTES + 1);
+    let input = format!(
+        r#"
+        [agent]
+        node_id = "hk-01"
+        node_label = "Hong Kong 01"
+        server = "ws://127.0.0.1:8080/ws"
+        token = "token"
+        tags = ["{oversized}"]
+        "#
+    );
+
+    let error = parse_agent_config(&input).expect_err("oversized tag should fail");
+    assert!(error.to_string().contains("agent.tags[0]"));
+}
+
+#[test]
+fn parses_server_config_with_install() {
+    let config = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+        node_registry_path = "/etc/nodelite/server.json"
+
+        [auth]
+        username = "viewer"
+        password = "secret"
+
+        [install]
+        agent_release_base_url = "https://downloads.example.com/nodelite/releases/latest/download"
+        agent_release_sha256_x86_64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        agent_release_sha256_aarch64 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        "#,
+    )
+    .expect("server config should parse");
+
+    assert_eq!(
+        config
+            .readonly_auth
+            .as_ref()
+            .map(|auth| auth.username.as_str()),
+        Some("viewer")
+    );
+    assert_eq!(
+        config.node_registry_path,
+        PathBuf::from("/etc/nodelite/server.json")
+    );
+    assert_eq!(
+        config.agent_release_base_url.as_deref(),
+        Some("https://downloads.example.com/nodelite/releases/latest/download")
+    );
+    assert_eq!(
+        config.agent_release_sha256_x86_64.as_deref(),
+        Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    );
+    assert_eq!(
+        config.agent_release_sha256_aarch64.as_deref(),
+        Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+    );
+}
+
+#[test]
+fn parses_server_config_with_totp_2fa() {
+    let config = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+
+        [auth]
+        username = "viewer"
+        password = "secret123"
+        enable_2fa = true
+        totp_secret = "JBSWY3DPEHPK3PXP"
+        "#,
+    )
+    .expect("2fa config should parse");
+
+    let auth = config.readonly_auth.expect("auth should be configured");
+    assert!(auth.enable_2fa);
+    assert_eq!(auth.totp_secret.as_deref(), Some("JBSWY3DPEHPK3PXP"));
+}
+
+#[test]
+fn parses_server_config_with_otpauth_totp_secret() {
+    let config = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+
+        [auth]
+        username = "viewer"
+        password = "secret123"
+        enable_2fa = true
+        totp_secret = "otpauth://totp/NodeLite:viewer%40example.com?secret=jbsw y3dp-ehpk3pxp&issuer=NodeLite"
+        "#,
+    )
+    .expect("otpauth uri should parse");
+
+    let auth = config.readonly_auth.expect("auth should be configured");
+    assert_eq!(auth.totp_secret.as_deref(), Some("JBSWY3DPEHPK3PXP"));
+}
+
+#[test]
+fn parses_server_config_with_secret_query_totp_secret() {
+    let config = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+
+        [auth]
+        username = "viewer"
+        password = "secret123"
+        enable_2fa = true
+        totp_secret = "secret=jbswy3dp ehpk3pxp&issuer=NodeLite"
+        "#,
+    )
+    .expect("secret query string should parse");
+
+    let auth = config.readonly_auth.expect("auth should be configured");
+    assert_eq!(auth.totp_secret.as_deref(), Some("JBSWY3DPEHPK3PXP"));
+}
+
+#[test]
+fn ignores_empty_totp_secret_when_2fa_is_disabled() {
+    let config = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+
+        [auth]
+        username = "viewer"
+        password = "secret123"
+        enable_2fa = false
+        totp_secret = ""
+        "#,
+    )
+    .expect("disabled 2fa should ignore empty totp secret");
+
+    let auth = config.readonly_auth.expect("auth should be configured");
+    assert!(!auth.enable_2fa);
+    assert_eq!(auth.totp_secret, None);
+}
+
+#[test]
+fn ignores_invalid_totp_secret_when_2fa_is_disabled() {
+    let config = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+
+        [auth]
+        username = "viewer"
+        password = "secret123"
+        enable_2fa = false
+        totp_secret = "not-a-base32-secret"
+        "#,
+    )
+    .expect("disabled 2fa should ignore invalid totp secret");
+
+    let auth = config.readonly_auth.expect("auth should be configured");
+    assert!(!auth.enable_2fa);
+    assert_eq!(auth.totp_secret.as_deref(), Some("NOTABASE32SECRET"));
+}
+
+#[test]
+fn rejects_2fa_without_totp_secret() {
+    let error = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+
+        [auth]
+        username = "viewer"
+        password = "secret123"
+        enable_2fa = true
+        "#,
+    )
+    .expect_err("2fa without totp secret should fail");
+
+    assert!(error.to_string().contains("auth.totp_secret"));
+}
+
+#[test]
+fn rejects_2fa_with_plaintext_public_base_url() {
+    let error = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "http://monitor.example.com"
+        insecure_allow_http = true
+
+        [auth]
+        username = "viewer"
+        password = "secret123"
+        enable_2fa = true
+        totp_secret = "JBSWY3DPEHPK3PXP"
+        "#,
+    )
+    .expect_err("2fa over plaintext http should be rejected");
+
+    assert!(error.to_string().contains("public_base_url"));
+    assert!(error.to_string().contains("https"));
+}
+
+#[test]
+fn rejects_public_listener_without_auth() {
+    let error = parse_server_config(
+        r#"
+        [server]
+        listen = "0.0.0.0:8080"
+        public_base_url = "https://monitor.example.com"
+        "#,
+    )
+    .expect_err("public listener without auth should fail");
+
+    assert!(error.to_string().contains("auth.username"));
+}
+
+#[test]
+fn rejects_install_release_base_without_checksums() {
+    let error = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+
+        [install]
+        agent_release_base_url = "https://downloads.example.com/nodelite/releases/latest/download"
+        "#,
+    )
+    .expect_err("release base without checksums should fail");
+
+    assert!(error.to_string().contains("agent_release_sha256_x86_64"));
+}
+
+#[test]
+fn rejects_invalid_ws_limits() {
+    let error = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "http://127.0.0.1:8080"
+
+        [ws]
+        max_total_connections = 4
+        max_connections_per_ip = 8
+        "#,
+    )
+    .expect_err("invalid ws limits should fail");
+
+    assert!(error.to_string().contains("ws.max_connections_per_ip"));
+}
+
+#[test]
+fn rejects_remote_http_without_explicit_opt_in() {
+    let error = parse_server_config(
+        r#"
+        [server]
+        listen = "0.0.0.0:8080"
+        public_base_url = "http://monitor.example.com"
+
+        [auth]
+        username = "viewer"
+        password = "secret"
+        "#,
+    )
+    .expect_err("remote http without opt-in should fail");
+
+    assert!(error.to_string().contains("server.insecure_allow_http"));
+}
+
+#[test]
+fn allows_remote_http_with_explicit_opt_in() {
+    let config = parse_server_config(
+        r#"
+        [server]
+        listen = "0.0.0.0:8080"
+        public_base_url = "http://monitor.example.com"
+        insecure_allow_http = true
+
+        [auth]
+        username = "viewer"
+        password = "secret"
+        "#,
+    )
+    .expect("remote http should parse with explicit opt-in");
+
+    assert!(config.insecure_allow_http);
+}
