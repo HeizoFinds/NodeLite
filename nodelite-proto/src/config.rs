@@ -45,6 +45,24 @@ pub const DEFAULT_WS_AUTH_BLOCK_SECS: u64 = 900;
 pub const MAX_NODE_TAGS: usize = 64;
 /// 单个标签允许的最大字节数。
 pub const MAX_NODE_TAG_BYTES: usize = 256;
+/// WebSocket Hello 握手超时(秒)。
+pub const DEFAULT_HELLO_TIMEOUT_SECS: u64 = 10;
+/// 最大未响应 Ping 数量。
+pub const DEFAULT_MAX_OUTSTANDING_PINGS: usize = 32;
+/// 不安全传输警告间隔(秒)。
+pub const DEFAULT_INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
+/// 最大磁盘数量限制。
+pub const DEFAULT_MAX_SANITIZED_DISKS: usize = 64;
+/// 最大字符串字节数限制。
+pub const DEFAULT_MAX_SANITIZED_STRING_BYTES: usize = 256;
+/// 指标异常会话限制。
+pub const DEFAULT_METRIC_ANOMALY_SESSION_LIMIT: usize = 5;
+/// SQLite 忙等待超时(秒)。
+pub const DEFAULT_SQLITE_BUSY_TIMEOUT_SECS: u64 = 5;
+/// Agent 连接超时(秒)。
+pub const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 20;
+/// Agent 最大接收消息字节数。
+pub const DEFAULT_MAX_INCOMING_MESSAGE_BYTES: usize = 64 * 1024;
 
 /// 配置加载或校验过程中产生的错误。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +105,20 @@ pub struct ServerConfig {
     pub agent_release_base_url: Option<String>,
     pub agent_release_sha256_x86_64: Option<String>,
     pub agent_release_sha256_aarch64: Option<String>,
+    #[serde(default = "default_hello_timeout_secs")]
+    pub hello_timeout_secs: u64,
+    #[serde(default = "default_max_outstanding_pings")]
+    pub max_outstanding_pings: usize,
+    #[serde(default = "default_insecure_transport_warn_interval_secs")]
+    pub insecure_transport_warn_interval_secs: u64,
+    #[serde(default = "default_max_sanitized_disks")]
+    pub max_sanitized_disks: usize,
+    #[serde(default = "default_max_sanitized_string_bytes")]
+    pub max_sanitized_string_bytes: usize,
+    #[serde(default = "default_metric_anomaly_session_limit")]
+    pub metric_anomaly_session_limit: usize,
+    #[serde(default = "default_sqlite_busy_timeout_secs")]
+    pub sqlite_busy_timeout_secs: u64,
 }
 
 /// 前端只读访问所用的基本认证凭证。
@@ -120,6 +152,12 @@ pub struct AgentConfig {
     pub report_interval_secs: u64,
     pub hostname_override: Option<String>,
     pub tags: Vec<String>,
+    #[serde(default = "default_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+    #[serde(default = "default_max_incoming_message_bytes")]
+    pub max_incoming_message_bytes: usize,
+    #[serde(default = "default_insecure_transport_warn_interval_secs")]
+    pub insecure_transport_warn_interval_secs: u64,
 }
 
 /// 从 TOML 文本中解析并校验出 `ServerConfig`。
@@ -171,6 +209,20 @@ struct RawServerSection {
     ping_interval_secs: u64,
     #[serde(default = "default_max_message_bytes")]
     max_message_bytes: usize,
+    #[serde(default = "default_hello_timeout_secs")]
+    hello_timeout_secs: u64,
+    #[serde(default = "default_max_outstanding_pings")]
+    max_outstanding_pings: usize,
+    #[serde(default = "default_insecure_transport_warn_interval_secs")]
+    insecure_transport_warn_interval_secs: u64,
+    #[serde(default = "default_max_sanitized_disks")]
+    max_sanitized_disks: usize,
+    #[serde(default = "default_max_sanitized_string_bytes")]
+    max_sanitized_string_bytes: usize,
+    #[serde(default = "default_metric_anomaly_session_limit")]
+    metric_anomaly_session_limit: usize,
+    #[serde(default = "default_sqlite_busy_timeout_secs")]
+    sqlite_busy_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -266,6 +318,12 @@ struct RawAgentSection {
     hostname_override: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
+    #[serde(default = "default_connect_timeout_secs")]
+    connect_timeout_secs: u64,
+    #[serde(default = "default_max_incoming_message_bytes")]
+    max_incoming_message_bytes: usize,
+    #[serde(default = "default_insecure_transport_warn_interval_secs")]
+    insecure_transport_warn_interval_secs: u64,
 }
 
 impl RawServerConfigFile {
@@ -453,6 +511,13 @@ impl RawServerConfigFile {
             agent_release_base_url: self.install.agent_release_base_url,
             agent_release_sha256_x86_64,
             agent_release_sha256_aarch64,
+            hello_timeout_secs: self.server.hello_timeout_secs,
+            max_outstanding_pings: self.server.max_outstanding_pings,
+            insecure_transport_warn_interval_secs: self.server.insecure_transport_warn_interval_secs,
+            max_sanitized_disks: self.server.max_sanitized_disks,
+            max_sanitized_string_bytes: self.server.max_sanitized_string_bytes,
+            metric_anomaly_session_limit: self.server.metric_anomaly_session_limit,
+            sqlite_busy_timeout_secs: self.server.sqlite_busy_timeout_secs,
         })
     }
 }
@@ -490,6 +555,9 @@ impl RawAgentConfigFile {
                 .hostname_override
                 .map(|value| value.trim().to_string()),
             tags: normalize_tags("agent.tags", self.agent.tags)?,
+            connect_timeout_secs: self.agent.connect_timeout_secs,
+            max_incoming_message_bytes: self.agent.max_incoming_message_bytes,
+            insecure_transport_warn_interval_secs: self.agent.insecure_transport_warn_interval_secs,
         })
     }
 }
@@ -688,6 +756,42 @@ fn default_ws_auth_block_secs() -> u64 {
 
 fn default_report_interval_secs() -> u64 {
     DEFAULT_REPORT_INTERVAL_SECS
+}
+
+fn default_hello_timeout_secs() -> u64 {
+    DEFAULT_HELLO_TIMEOUT_SECS
+}
+
+fn default_max_outstanding_pings() -> usize {
+    DEFAULT_MAX_OUTSTANDING_PINGS
+}
+
+fn default_insecure_transport_warn_interval_secs() -> u64 {
+    DEFAULT_INSECURE_TRANSPORT_WARN_INTERVAL_SECS
+}
+
+fn default_max_sanitized_disks() -> usize {
+    DEFAULT_MAX_SANITIZED_DISKS
+}
+
+fn default_max_sanitized_string_bytes() -> usize {
+    DEFAULT_MAX_SANITIZED_STRING_BYTES
+}
+
+fn default_metric_anomaly_session_limit() -> usize {
+    DEFAULT_METRIC_ANOMALY_SESSION_LIMIT
+}
+
+fn default_sqlite_busy_timeout_secs() -> u64 {
+    DEFAULT_SQLITE_BUSY_TIMEOUT_SECS
+}
+
+fn default_connect_timeout_secs() -> u64 {
+    DEFAULT_CONNECT_TIMEOUT_SECS
+}
+
+fn default_max_incoming_message_bytes() -> usize {
+    DEFAULT_MAX_INCOMING_MESSAGE_BYTES
 }
 
 /// 默认忽略的文件系统类型;这些通常是虚拟挂载,不应在磁盘视图中出现。

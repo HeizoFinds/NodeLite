@@ -103,8 +103,6 @@ struct ServerReadiness {
     registry_reload_healthy: Arc<AtomicBool>,
 }
 
-/// 不安全传输警告的输出间隔(秒)。
-const INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
 const PROTECTED_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; \
      img-src 'self' data:; connect-src 'self' https://raw.githubusercontent.com https://api.github.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 const PROTECTED_CACHE_CONTROL: &str = "no-store, no-cache, must-revalidate";
@@ -180,7 +178,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
             )
         })?;
     let shared = SharedState::new(Arc::clone(&config));
-    let history = HistoryStore::new(config.history_db_path.clone());
+    let history = HistoryStore::new(config.history_db_path.clone(), config.sqlite_busy_timeout_secs);
     let agent_logs = AgentLogStore::new();
     history.initialize().await;
     let readiness = ServerReadiness::new(history.is_available());
@@ -195,7 +193,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
     );
     spawn_stale_reaper(shared.clone());
     spawn_snapshot_persistor(shared.clone(), config.snapshot_path.clone());
-    spawn_insecure_transport_warning(config.public_base_url.clone(), config.listen);
+    spawn_insecure_transport_warning(config.public_base_url.clone(), config.listen, config.insecure_transport_warn_interval_secs);
 
     let enrolled_nodes = registry.count().await;
     info!(
@@ -460,13 +458,13 @@ fn spawn_registry_reloader(
 }
 
 /// 在监听非回环地址但仍然使用 `http://` 公网基址时,周期性输出 TLS 警告。
-fn spawn_insecure_transport_warning(public_base_url: String, listen: std::net::SocketAddr) {
+fn spawn_insecure_transport_warning(public_base_url: String, listen: std::net::SocketAddr, insecure_transport_warn_interval_secs: u64) {
     if !uses_insecure_remote_public_base_url(&public_base_url, listen) {
         return;
     }
 
     tokio::spawn(async move {
-        let mut ticker = interval(Duration::from_secs(INSECURE_TRANSPORT_WARN_INTERVAL_SECS));
+        let mut ticker = interval(Duration::from_secs(insecure_transport_warn_interval_secs));
         // 警告是节流型日志,跳过错过的 tick 即可,不要在恢复后连续 burst 多条相同警告。
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
@@ -636,10 +634,17 @@ mod tests {
             agent_release_base_url: None,
             agent_release_sha256_x86_64: None,
             agent_release_sha256_aarch64: None,
+            hello_timeout_secs: 10,
+            max_outstanding_pings: 32,
+            insecure_transport_warn_interval_secs: 900,
+            max_sanitized_disks: 64,
+            max_sanitized_string_bytes: 256,
+            metric_anomaly_session_limit: 5,
+            sqlite_busy_timeout_secs: 5,
         });
         let runtime = Runtime::new().expect("runtime should build");
         let state = AppState {
-            history: HistoryStore::new(PathBuf::from("./data/history.sqlite3")),
+            history: HistoryStore::new(PathBuf::from("./data/history.sqlite3"), 5),
             agent_logs: AgentLogStore::new(),
             install_admission: InstallAdmissionController::new(InstallAdmissionConfig {
                 auth_fail_window_secs: 300,
@@ -872,9 +877,16 @@ mod tests {
                 agent_release_base_url: None,
                 agent_release_sha256_x86_64: None,
                 agent_release_sha256_aarch64: None,
+                hello_timeout_secs: 10,
+                max_outstanding_pings: 32,
+                insecure_transport_warn_interval_secs: 900,
+                max_sanitized_disks: 64,
+                max_sanitized_string_bytes: 256,
+                metric_anomaly_session_limit: 5,
+                sqlite_busy_timeout_secs: 5,
             });
             let state = AppState {
-                history: HistoryStore::new(config.history_db_path.clone()),
+                history: HistoryStore::new(config.history_db_path.clone(), 5),
                 agent_logs: AgentLogStore::new(),
                 install_admission: InstallAdmissionController::new(InstallAdmissionConfig {
                     auth_fail_window_secs: 300,
@@ -969,9 +981,16 @@ mod tests {
                 agent_release_base_url: None,
                 agent_release_sha256_x86_64: None,
                 agent_release_sha256_aarch64: None,
+                hello_timeout_secs: 10,
+                max_outstanding_pings: 32,
+                insecure_transport_warn_interval_secs: 900,
+                max_sanitized_disks: 64,
+                max_sanitized_string_bytes: 256,
+                metric_anomaly_session_limit: 5,
+                sqlite_busy_timeout_secs: 5,
             });
             let state = AppState {
-                history: HistoryStore::new(config.history_db_path.clone()),
+                history: HistoryStore::new(config.history_db_path.clone(), 5),
                 agent_logs: AgentLogStore::new(),
                 install_admission: InstallAdmissionController::new(InstallAdmissionConfig {
                     auth_fail_window_secs: 300,
@@ -1071,6 +1090,13 @@ mod tests {
             agent_release_base_url: None,
             agent_release_sha256_x86_64: None,
             agent_release_sha256_aarch64: None,
+            hello_timeout_secs: 10,
+            max_outstanding_pings: 32,
+            insecure_transport_warn_interval_secs: 900,
+            max_sanitized_disks: 64,
+            max_sanitized_string_bytes: 256,
+            metric_anomaly_session_limit: 5,
+            sqlite_busy_timeout_secs: 5,
         };
         let snapshot = NodeSnapshot {
             collected_at: Utc::now(),
@@ -1177,6 +1203,13 @@ mod tests {
             agent_release_base_url: None,
             agent_release_sha256_x86_64: None,
             agent_release_sha256_aarch64: None,
+            hello_timeout_secs: 10,
+            max_outstanding_pings: 32,
+            insecure_transport_warn_interval_secs: 900,
+            max_sanitized_disks: 64,
+            max_sanitized_string_bytes: 256,
+            metric_anomaly_session_limit: 5,
+            sqlite_busy_timeout_secs: 5,
         };
         let oversized = "x".repeat(MAX_SANITIZED_STRING_BYTES * 4);
         let snapshot = NodeSnapshot {
@@ -1246,6 +1279,13 @@ mod tests {
             agent_release_base_url: None,
             agent_release_sha256_x86_64: None,
             agent_release_sha256_aarch64: None,
+            hello_timeout_secs: 10,
+            max_outstanding_pings: 32,
+            insecure_transport_warn_interval_secs: 900,
+            max_sanitized_disks: 64,
+            max_sanitized_string_bytes: 256,
+            metric_anomaly_session_limit: 5,
+            sqlite_busy_timeout_secs: 5,
         };
         let disks = (0..(MAX_SANITIZED_DISKS + 3))
             .map(|index| nodelite_proto::DiskUsage {
@@ -1332,6 +1372,13 @@ mod tests {
             agent_release_base_url: None,
             agent_release_sha256_x86_64: None,
             agent_release_sha256_aarch64: None,
+            hello_timeout_secs: 10,
+            max_outstanding_pings: 32,
+            insecure_transport_warn_interval_secs: 900,
+            max_sanitized_disks: 64,
+            max_sanitized_string_bytes: 256,
+            metric_anomaly_session_limit: 5,
+            sqlite_busy_timeout_secs: 5,
         };
         let snapshot = NodeSnapshot {
             collected_at: Utc::now(),

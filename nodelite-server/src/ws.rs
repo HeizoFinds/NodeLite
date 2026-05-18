@@ -38,10 +38,6 @@ use crate::sanitize::{
 };
 use crate::state::{SessionCommand, SessionRefreshReply};
 
-/// 等待 Hello 报文的超时时间(秒)。
-const HELLO_TIMEOUT_SECS: u64 = 10;
-/// 同时未应答的 Ping 上限,超过后会丢弃最老的一条,避免内存占用无限增长。
-const MAX_OUTSTANDING_PINGS: usize = 32;
 /// Token 距离过期不足该天数时,服务端在已认证会话内主动续期并下发新 token。
 const AGENT_TOKEN_REFRESH_BEFORE_EXPIRY_DAYS: i64 = 7;
 
@@ -109,8 +105,9 @@ async fn handle_socket(
     mut socket: WebSocket,
 ) -> Result<(), ProtocolError> {
     let shared = state.shared.clone();
+    let hello_timeout_secs = shared.config().hello_timeout_secs;
     let hello = match tokio::time::timeout(
-        Duration::from_secs(HELLO_TIMEOUT_SECS),
+        Duration::from_secs(hello_timeout_secs),
         recv_hello(&mut socket),
     )
     .await
@@ -405,7 +402,7 @@ async fn handle_socket(
                         .await?;
                     }
 
-                    prune_outstanding_pings(&mut outstanding_pings, ping_expiry);
+                    prune_outstanding_pings(&mut outstanding_pings, ping_expiry, shared.config().max_outstanding_pings);
                     let nonce = next_ping_nonce;
                     next_ping_nonce = next_ping_nonce.saturating_add(1);
                     outstanding_pings.insert(nonce, Instant::now());
@@ -532,10 +529,10 @@ async fn send_wire_message(
 }
 
 /// 清理"过期或过多"的 Ping 记录,避免在 Agent 异常时无限制堆积。
-fn prune_outstanding_pings(outstanding_pings: &mut HashMap<u64, Instant>, max_age: Duration) {
+fn prune_outstanding_pings(outstanding_pings: &mut HashMap<u64, Instant>, max_age: Duration, max_outstanding_pings: usize) {
     outstanding_pings.retain(|_, sent_at| sent_at.elapsed() < max_age);
 
-    if outstanding_pings.len() < MAX_OUTSTANDING_PINGS {
+    if outstanding_pings.len() < max_outstanding_pings {
         return;
     }
 

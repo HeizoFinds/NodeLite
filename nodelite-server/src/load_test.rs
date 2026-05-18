@@ -202,9 +202,16 @@ impl TestServer {
             agent_release_base_url: None,
             agent_release_sha256_x86_64: None,
             agent_release_sha256_aarch64: None,
+            hello_timeout_secs: 10,
+            max_outstanding_pings: 32,
+            insecure_transport_warn_interval_secs: 900,
+            max_sanitized_disks: 64,
+            max_sanitized_string_bytes: 256,
+            metric_anomaly_session_limit: 5,
+            sqlite_busy_timeout_secs: 5,
         });
 
-        let history = HistoryStore::new(history_path);
+        let history = HistoryStore::new(history_path, 5);
         history.initialize().await;
         let readiness = ServerReadiness::new(history.is_available());
         let state = AppState {

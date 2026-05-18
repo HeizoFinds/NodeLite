@@ -35,16 +35,6 @@ use tracing::{info, warn};
 
 use crate::collector::new_collector;
 
-/// 不安全传输警告的输出间隔(秒)。
-const INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
-/// 建立 WebSocket 连接时的超时阈值(秒)。
-const CONNECT_TIMEOUT_SECS: u64 = 20;
-/// 允许接收的单条 WebSocket 消息上限(字节)。
-///
-/// 服务端只会向 Agent 下发 Ping 与 ServerNotice 这两种短消息,正常体量不超过
-/// 几百字节;这里收紧到 64 KiB,既给协议未来扩展留出余量,又能在被攻陷的
-/// 服务端推送超大帧时由底层库主动断开,而不是让 Agent 在帧拼接阶段 OOM。
-const MAX_INCOMING_MESSAGE_BYTES: usize = 64 * 1024;
 /// Agent 本地最多暂存的待上报日志条数。超出后丢弃最旧项,避免断线期间内存无限增长。
 const MAX_PENDING_AGENT_LOGS: usize = 256;
 /// 单次推送到服务端的最大日志条数,控制消息体积。
@@ -169,7 +159,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    spawn_insecure_transport_warning(config.server.clone());
+    spawn_insecure_transport_warning(config.server.clone(), config.insecure_transport_warn_interval_secs);
     run_forever(config, collector, identity, cli.config, log_buffer).await
 }
 
@@ -336,8 +326,8 @@ async fn run_session(
         format!("connecting to {}", config.server),
     );
     let (socket, _) = timeout(
-        Duration::from_secs(CONNECT_TIMEOUT_SECS),
-        connect_async_with_config(config.server.as_str(), Some(incoming_ws_config()), false),
+        Duration::from_secs(config.connect_timeout_secs),
+        connect_async_with_config(config.server.as_str(), Some(incoming_ws_config(config.max_incoming_message_bytes)), false),
     )
     .await
     .map_err(|_| session_error(false, anyhow!("timed out connecting to {}", config.server)))?
@@ -512,12 +502,12 @@ fn token_expired_error(source: anyhow::Error) -> SessionError {
     }
 }
 
-/// 构造接收侧的 WebSocket 配置:把单帧与单消息上限收紧到 `MAX_INCOMING_MESSAGE_BYTES`,
+/// 构造接收侧的 WebSocket 配置:把单帧与单消息上限收紧到 `max_incoming_message_bytes`,
 /// 防止被攻陷的服务端通过下发巨型帧把 Agent 进程拖到 OOM。
-fn incoming_ws_config() -> WebSocketConfig {
+fn incoming_ws_config(max_incoming_message_bytes: usize) -> WebSocketConfig {
     WebSocketConfig::default()
-        .max_frame_size(Some(MAX_INCOMING_MESSAGE_BYTES))
-        .max_message_size(Some(MAX_INCOMING_MESSAGE_BYTES))
+        .max_frame_size(Some(max_incoming_message_bytes))
+        .max_message_size(Some(max_incoming_message_bytes))
 }
 
 /// 采集一次快照并以 `Metrics` 帧发送出去。
@@ -608,13 +598,13 @@ fn sample_random_u64() -> Option<u64> {
 }
 
 /// 若 Agent 配置了未启用 TLS 的远程服务器,则周期性输出警告日志。
-fn spawn_insecure_transport_warning(server_url: String) {
+fn spawn_insecure_transport_warning(server_url: String, insecure_transport_warn_interval_secs: u64) {
     if !uses_insecure_remote_transport(&server_url) {
         return;
     }
 
     tokio::spawn(async move {
-        let mut ticker = interval(Duration::from_secs(INSECURE_TRANSPORT_WARN_INTERVAL_SECS));
+        let mut ticker = interval(Duration::from_secs(insecure_transport_warn_interval_secs));
         // 警告是节流型日志,跳过错过的 tick 即可,不要在恢复后连续 burst 多条相同警告。
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {

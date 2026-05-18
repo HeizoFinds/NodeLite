@@ -20,6 +20,20 @@ stale_after_secs = 20
 ping_interval_secs = 10
 # WebSocket 单帧最大字节数,防止异常 Agent 发巨型负载。
 max_message_bytes = 65536
+# WebSocket Hello 握手超时(秒)。
+hello_timeout_secs = 10
+# 最大未响应 Ping 数量。
+max_outstanding_pings = 32
+# 不安全传输警告间隔(秒)。
+insecure_transport_warn_interval_secs = 900
+# 最大磁盘数量限制。
+max_sanitized_disks = 64
+# 最大字符串字节数限制。
+max_sanitized_string_bytes = 256
+# 指标异常会话限制。
+metric_anomaly_session_limit = 5
+# SQLite 忙等待超时(秒)。
+sqlite_busy_timeout_secs = 5
 
 [auth]
 # 前端只读访问用的基本认证用户名。

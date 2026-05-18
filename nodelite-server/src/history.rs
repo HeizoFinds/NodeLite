@@ -29,7 +29,6 @@ use crate::fs_security::{create_private_dir_all, ensure_directory_mode};
 use std::os::unix::fs::PermissionsExt;
 
 /// SQLite 在并发写入冲突时的等待时长。
-const SQLITE_BUSY_TIMEOUT_SECS: u64 = 5;
 const SQLITE_BUSY_MAX_RETRIES: u32 = 10;
 const SQLITE_BUSY_RETRY_BASE_MS: u64 = 50;
 const SQLITE_BUSY_RETRY_MAX_MS: u64 = 1_000;
@@ -66,10 +65,12 @@ pub struct HistoryStore {
     artifacts_hardened_after_write: Arc<AtomicBool>,
     /// 写入互斥:多个节点的写入串行化,简化 SQLite 端的锁竞争。
     write_gate: Arc<Mutex<()>>,
+    /// SQLite 忙等待超时(秒)。
+    sqlite_busy_timeout_secs: u64,
 }
 
 impl HistoryStore {
-    pub fn new(db_path: PathBuf) -> Self {
+    pub fn new(db_path: PathBuf, sqlite_busy_timeout_secs: u64) -> Self {
         Self {
             db_path: Arc::new(db_path),
             available: Arc::new(AtomicBool::new(false)),
@@ -78,13 +79,15 @@ impl HistoryStore {
             last_pruned_at: Arc::new(Mutex::new(None)),
             artifacts_hardened_after_write: Arc::new(AtomicBool::new(false)),
             write_gate: Arc::new(Mutex::new(())),
+            sqlite_busy_timeout_secs,
         }
     }
 
     /// 初始化数据库:建表、建索引、加锁权限。失败不会抛出,仅记录警告并保持 `available=false`。
     pub async fn initialize(&self) {
         let db_path = Arc::clone(&self.db_path);
-        let result = tokio::task::spawn_blocking(move || initialize_database(db_path.as_ref()))
+        let sqlite_busy_timeout_secs = self.sqlite_busy_timeout_secs;
+        let result = tokio::task::spawn_blocking(move || initialize_database(db_path.as_ref(), sqlite_busy_timeout_secs))
             .await
             .context("history database task failed");
 
@@ -277,14 +280,14 @@ impl HistoryStore {
 
 /// 建库:如果父目录不存在则创建,然后建表 / 建索引并收紧权限。
 /// 返回已配置好的持久化连接(WAL 模式 + busy_timeout),供后续写入/查询复用。
-fn initialize_database(db_path: &PathBuf) -> Result<Connection> {
+fn initialize_database(db_path: &PathBuf, sqlite_busy_timeout_secs: u64) -> Result<Connection> {
     if let Some(parent) = db_path.parent()
         && !parent.as_os_str().is_empty()
     {
         create_private_dir_all(parent)?;
     }
 
-    let connection = open_database_connection(db_path, true)?;
+    let connection = open_database_connection(db_path, true, sqlite_busy_timeout_secs)?;
     connection.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS history_points (
@@ -425,11 +428,11 @@ fn query_history_between(
 }
 
 /// 打开 SQLite 连接,可选启用 WAL 模式以提升并发写入吞吐。
-fn open_database_connection(db_path: &PathBuf, enable_wal: bool) -> Result<Connection> {
+fn open_database_connection(db_path: &PathBuf, enable_wal: bool, sqlite_busy_timeout_secs: u64) -> Result<Connection> {
     let connection = Connection::open(db_path)
         .with_context(|| format!("failed to open history database {}", db_path.display()))?;
     connection
-        .busy_timeout(Duration::from_secs(SQLITE_BUSY_TIMEOUT_SECS))
+        .busy_timeout(Duration::from_secs(sqlite_busy_timeout_secs))
         .context("failed to configure sqlite busy timeout")?;
     if enable_wal {
         connection
@@ -627,7 +630,7 @@ mod tests {
             let data_dir = temp_dir.join("data");
             let db_path = data_dir.join("history.sqlite3");
 
-            let connection = initialize_database(&db_path).expect("database should initialize");
+            let connection = initialize_database(&db_path, 5).expect("database should initialize");
             write_history_point(
                 &db_path,
                 &connection,
@@ -668,7 +671,7 @@ mod tests {
     fn forget_missing_prunes_retired_nodes_from_write_throttle_state() {
         let runtime = Runtime::new().expect("runtime should build");
         runtime.block_on(async {
-            let store = HistoryStore::new(PathBuf::from("./data/history.sqlite3"));
+            let store = HistoryStore::new(PathBuf::from("./data/history.sqlite3"), 5);
             {
                 let mut guard = store.last_written_at.lock().await;
                 guard.insert("hk-01".to_string(), Utc::now());
@@ -697,7 +700,7 @@ mod tests {
         let temp_dir = std::env::temp_dir().join(format!("nodelite-history-query-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
         let db_path = temp_dir.join("history.sqlite3");
-        let connection = initialize_database(&db_path).expect("database should initialize");
+        let connection = initialize_database(&db_path, 5).expect("database should initialize");
         let hardened = AtomicBool::new(false);
         let start = Utc::now() - Duration::hours(6);
         for index in 0..180 {
@@ -743,7 +746,7 @@ mod tests {
         let temp_dir = std::env::temp_dir().join(format!("nodelite-history-query-plan-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
         let db_path = temp_dir.join("history.sqlite3");
-        let connection = initialize_database(&db_path).expect("database should initialize");
+        let connection = initialize_database(&db_path, 5).expect("database should initialize");
         let explain_sql = format!("EXPLAIN QUERY PLAN {HISTORY_QUERY_SQL}");
         let mut statement = connection
             .prepare(&explain_sql)
