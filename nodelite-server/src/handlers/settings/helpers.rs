@@ -204,9 +204,14 @@ pub(super) fn server_update_shell_command(log_path: &Path) -> String {
     );
     [
         "set -u".to_string(),
+        "umask 077".to_string(),
         format!("log={}", shell_quote(&log_path.display().to_string())),
-        "tmp_script=\"$(mktemp /tmp/nodelite-install-server.XXXXXX)\"".to_string(),
+        "cache_dir=\"${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/nodelite\"".to_string(),
+        "mkdir -p \"$cache_dir\"".to_string(),
+        "chmod 0700 \"$cache_dir\" >>\"$log\" 2>&1 || true".to_string(),
+        "tmp_script=\"$(mktemp \"$cache_dir/install-server.XXXXXX\")\"".to_string(),
         "trap 'rm -f \"$tmp_script\"' EXIT".to_string(),
+        "chmod 0600 \"$tmp_script\" >>\"$log\" 2>&1".to_string(),
         ": >\"$log\"".to_string(),
         "echo \"nodelite-update: started at $(date -u +%Y-%m-%dT%H:%M:%SZ)\" >>\"$log\"".to_string(),
         format!(
@@ -454,7 +459,11 @@ fn toml_basic_string(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{otpauth_uri, replace_auth_2fa, validate_password_for_settings};
+    use std::path::Path;
+
+    use super::{
+        otpauth_uri, replace_auth_2fa, server_update_shell_command, validate_password_for_settings,
+    };
 
     #[test]
     fn replace_auth_2fa_enables_and_preserves_auth_section() {
@@ -577,5 +586,16 @@ totp_secret = "JBSWY3DPEHPK3PXP"
         assert!(validate_password_for_settings("MyStr0ng!Pass").is_ok());
         assert!(validate_password_for_settings("C0mpl3x@Passw0rd!").is_ok());
         assert!(validate_password_for_settings("Secure#2024$Pass").is_ok());
+    }
+
+    #[test]
+    fn server_update_shell_command_uses_private_cache_dir_for_temp_script() {
+        let command = server_update_shell_command(Path::new("/tmp/nodelite-update.log"));
+
+        assert!(command.contains("umask 077"));
+        assert!(command.contains("cache_dir=\"${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/nodelite\""));
+        assert!(command.contains("mkdir -p \"$cache_dir\""));
+        assert!(command.contains("tmp_script=\"$(mktemp \"$cache_dir/install-server.XXXXXX\")\""));
+        assert!(command.contains("chmod 0600 \"$tmp_script\""));
     }
 }
