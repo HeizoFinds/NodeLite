@@ -289,7 +289,6 @@ fn install_endpoints_disable_caching() {
                 node_id: "osaka-01".to_string(),
                 node_label: Some("Osaka 01".to_string()),
                 tags: Vec::new(),
-                rotate_token: false,
             },
         )
         .await
