@@ -153,6 +153,7 @@ impl WsAdmissionController {
                 failure_state.blocked_until.is_some_and(|until| until > now)
                     || !failure_state.recent_failures.is_empty()
             });
+            reconcile_ws_connection_counters(&mut guard, &self.config);
             self.state.clear_poison();
             guard
         })
@@ -163,6 +164,19 @@ impl Drop for WsConnectionPermit {
     fn drop(&mut self) {
         self.controller.release_connection(self.client_ip);
     }
+}
+
+fn reconcile_ws_connection_counters(state: &mut WsAdmissionState, config: &WsConfig) {
+    state.active_by_ip.retain(|_, active| *active > 0);
+    let summed_connections = state
+        .active_by_ip
+        .values()
+        .copied()
+        .fold(0usize, usize::saturating_add);
+    state.total_active_connections = state
+        .total_active_connections
+        .max(summed_connections)
+        .min(config.max_total_connections);
 }
 
 /// `/install/bootstrap` 与 `/api/verify-2fa` 共用的 IP 维度认证失败计数器,
@@ -379,22 +393,42 @@ mod tests {
     }
 
     #[test]
-    fn websocket_admission_preserves_state_after_mutex_poison() {
+    fn websocket_admission_keeps_capacity_limits_after_mutex_poison() {
         let controller = WsAdmissionController::new(&test_ws_config());
         let client_ip = IpAddr::from_str("198.51.100.10").expect("valid test IP");
 
         let _ = catch_unwind(AssertUnwindSafe(|| {
             let mut state = controller.state.lock().expect("lock state");
-            state.total_active_connections = 1;
-            state.active_by_ip.insert(client_ip, 0);
+            state.total_active_connections = controller.config.max_total_connections;
+            state
+                .active_by_ip
+                .insert(client_ip, controller.config.max_connections_per_ip);
             panic!("poison admission state");
         }));
 
-        // After poison, valid state should be preserved, not reset
-        let permit = controller
-            .try_acquire(client_ip)
-            .expect("poisoned state should be preserved, allowing admission if under limits");
-        drop(permit);
+        assert!(matches!(
+            controller.try_acquire(client_ip),
+            Err(WsAdmissionError::TotalCapacity)
+        ));
+        assert!(controller.state.lock().is_ok());
+    }
+
+    #[test]
+    fn websocket_admission_reconciles_connection_counters_after_mutex_poison() {
+        let controller = WsAdmissionController::new(&test_ws_config());
+        let client_ip = IpAddr::from_str("198.51.100.12").expect("valid test IP");
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let mut state = controller.state.lock().expect("lock state");
+            state.total_active_connections = 0;
+            state.active_by_ip.insert(client_ip, 1);
+            panic!("poison admission state");
+        }));
+
+        let state = controller.lock_state();
+        assert_eq!(state.total_active_connections, 1);
+        assert_eq!(state.active_by_ip.get(&client_ip), Some(&1));
+        drop(state);
         assert!(controller.state.lock().is_ok());
     }
 
