@@ -350,6 +350,54 @@
         gap: 8px;
         min-width: 0;
       }
+      .panel-tools {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .panel-meta-stack {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 3px;
+        min-width: 0;
+      }
+      .panel-meta-sub {
+        font-size: 11px;
+        color: var(--text-muted);
+        line-height: 1.3;
+        text-align: right;
+        white-space: nowrap;
+      }
+      .panel-meta-pair {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .metric-down { color: var(--chart-network-down); }
+      .metric-up { color: var(--chart-network-up); }
+      .metric-prefix {
+        color: var(--text-muted);
+        font-weight: 500;
+      }
+      .chart-zoom-button {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        border: 1px solid var(--border-soft);
+        background: var(--bg-card-soft);
+        color: var(--text-muted);
+        display: grid;
+        place-items: center;
+        padding: 0;
+      }
+      .chart-zoom-button:hover {
+        color: var(--text-secondary);
+        background: var(--bg-card);
+      }
+      .chart-zoom-button svg { width: 14px; height: 14px; }
 
       /* Server info card spans 2 rows */
       .info-card { grid-column: span 1; grid-row: span 2; padding: 18px 20px; }
@@ -430,6 +478,15 @@
       .small-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
       .small-card .label { color: var(--text-muted); font-size: 12px; }
       .small-card .value { font-size: 22px; font-weight: 600; }
+      .small-card .value-subtle {
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+      .value-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
       .small-card.progress .progress-bar {
         height: 8px;
         border-radius: 999px;
@@ -591,6 +648,111 @@
       }
       .network-chart-card .chart-stage {
         min-height: 170px;
+      }
+      .chart-modal-overlay {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 22px;
+        background: rgba(3, 7, 18, 0.64);
+        backdrop-filter: blur(14px);
+        z-index: 60;
+      }
+      .chart-modal-overlay[hidden] { display: none !important; }
+      .chart-modal {
+        width: min(1040px, 100%);
+        max-height: min(84vh, 900px);
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        gap: 14px;
+        background:
+          radial-gradient(circle at top right, rgba(59,130,246,0.12), transparent 28%),
+          var(--bg-card);
+        border: 1px solid var(--border-soft);
+        border-radius: 26px;
+        box-shadow: 0 36px 100px rgba(15, 23, 42, 0.28);
+        overflow: hidden;
+      }
+      .chart-modal-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 20px 22px 0;
+      }
+      .chart-modal-title {
+        display: grid;
+        gap: 4px;
+      }
+      .chart-modal-title h3 {
+        margin: 0;
+        font-size: 20px;
+        letter-spacing: -0.01em;
+      }
+      .chart-modal-title p {
+        margin: 0;
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+      .chart-modal-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .chart-modal-toolbar {
+        display: flex;
+        align-items: stretch;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 0 22px;
+      }
+      .chart-modal-stat {
+        min-width: 156px;
+        flex: 1 1 0;
+        border: 1px solid var(--border-soft);
+        background: var(--bg-card-soft);
+        border-radius: 16px;
+        padding: 12px 14px;
+        display: grid;
+        gap: 6px;
+      }
+      .chart-modal-stat .label {
+        font-size: 11px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .chart-modal-stat .value {
+        font-size: 22px;
+        font-weight: 600;
+        color: var(--text-primary);
+        line-height: 1.2;
+      }
+      .chart-modal-stat .value-subtle {
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+      .chart-modal-body {
+        margin: 0 22px 22px;
+        border-radius: 20px;
+        border: 1px solid var(--border-soft);
+        background: var(--bg-panel);
+        padding: 18px 18px 14px;
+        display: grid;
+        gap: 10px;
+        min-height: 380px;
+      }
+      .chart-modal-stage {
+        min-height: 320px;
+        margin-top: 0;
+      }
+      .chart-modal-axis {
+        height: 18px;
+        margin-top: 0;
       }
 
       .disks { padding: 16px 20px; }
@@ -851,6 +1013,8 @@
         .info-card { grid-row: span 2; grid-column: span 2; }
         .charts-grid { grid-template-columns: 1fr; }
         .settings-grid { grid-template-columns: 1fr; }
+        .chart-modal-toolbar { flex-direction: column; }
+        .chart-modal-stat { min-width: 0; }
       }
       @media (max-width: 720px) {
         .app { grid-template-columns: 1fr; }
@@ -876,6 +1040,11 @@
         .topbar { flex-direction: column; }
         .layout-overview { grid-template-columns: 1fr; }
         .info-card { grid-column: span 1; grid-row: auto; }
+        .chart-modal-overlay { padding: 12px; }
+        .chart-modal-head,
+        .chart-modal-toolbar { padding-left: 16px; padding-right: 16px; }
+        .chart-modal-body { margin: 0 16px 16px; min-height: 280px; }
+        .chart-modal-stage { min-height: 240px; }
       }
     </style>
   </head>
@@ -969,8 +1138,21 @@
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.cpu_usage">CPU Usage</div>
                 <div class="panel-actions">
-                  <button type="button" class="chart-clip-toggle" data-clip-chart="cpu"></button>
-                  <div class="panel-meta" id="now-cpu">--</div>
+                  <div class="panel-tools">
+                    <button type="button" class="chart-zoom-button" data-zoom-chart="cpu" data-i18n-aria-label="node.chart.zoom" title="Zoom chart">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M15 3h6v6"></path>
+                        <path d="M9 21H3v-6"></path>
+                        <path d="M21 3l-7 7"></path>
+                        <path d="M3 21l7-7"></path>
+                      </svg>
+                    </button>
+                    <button type="button" class="chart-clip-toggle" data-clip-chart="cpu"></button>
+                  </div>
+                  <div class="panel-meta-stack">
+                    <div class="panel-meta" id="now-cpu">--</div>
+                    <div class="panel-meta-sub" id="avg-cpu">Avg —</div>
+                  </div>
                 </div>
               </div>
               <div class="chart-stage" id="chart-cpu"></div>
@@ -981,8 +1163,21 @@
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.memory_usage">Memory Usage</div>
                 <div class="panel-actions">
-                  <button type="button" class="chart-clip-toggle" data-clip-chart="memory"></button>
-                  <div class="panel-meta" id="now-memory">--</div>
+                  <div class="panel-tools">
+                    <button type="button" class="chart-zoom-button" data-zoom-chart="memory" data-i18n-aria-label="node.chart.zoom" title="Zoom chart">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M15 3h6v6"></path>
+                        <path d="M9 21H3v-6"></path>
+                        <path d="M21 3l-7 7"></path>
+                        <path d="M3 21l7-7"></path>
+                      </svg>
+                    </button>
+                    <button type="button" class="chart-clip-toggle" data-clip-chart="memory"></button>
+                  </div>
+                  <div class="panel-meta-stack">
+                    <div class="panel-meta" id="now-memory">--</div>
+                    <div class="panel-meta-sub" id="avg-memory">Avg —</div>
+                  </div>
                 </div>
               </div>
               <div class="chart-stage" id="chart-memory"></div>
@@ -993,8 +1188,21 @@
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.network_traffic">Network Traffic</div>
                 <div class="panel-actions">
-                  <button type="button" class="chart-clip-toggle" data-clip-chart="network"></button>
-                  <div class="panel-meta" id="now-network">--</div>
+                  <div class="panel-tools">
+                    <button type="button" class="chart-zoom-button" data-zoom-chart="network" data-i18n-aria-label="node.chart.zoom" title="Zoom chart">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M15 3h6v6"></path>
+                        <path d="M9 21H3v-6"></path>
+                        <path d="M21 3l-7 7"></path>
+                        <path d="M3 21l7-7"></path>
+                      </svg>
+                    </button>
+                    <button type="button" class="chart-clip-toggle" data-clip-chart="network"></button>
+                  </div>
+                  <div class="panel-meta-stack">
+                    <div class="panel-meta panel-meta-pair" id="now-network">--</div>
+                    <div class="panel-meta-sub panel-meta-pair" id="avg-network">Avg —</div>
+                  </div>
                 </div>
               </div>
               <div class="chart-stage" id="chart-network"></div>
@@ -1017,9 +1225,22 @@
             <article class="panel small-card">
               <div class="small-card-head">
                 <div class="label" data-i18n="node.latency_history">RTT</div>
-                <button type="button" class="chart-clip-toggle" data-clip-chart="latency"></button>
+                <div class="panel-tools">
+                  <button type="button" class="chart-zoom-button" data-zoom-chart="latency" data-i18n-aria-label="node.chart.zoom" title="Zoom chart">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M15 3h6v6"></path>
+                      <path d="M9 21H3v-6"></path>
+                      <path d="M21 3l-7 7"></path>
+                      <path d="M3 21l7-7"></path>
+                    </svg>
+                  </button>
+                  <button type="button" class="chart-clip-toggle" data-clip-chart="latency"></button>
+                </div>
               </div>
-              <div class="value" id="latency-value">--</div>
+              <div class="value-stack">
+                <div class="value" id="latency-value">--</div>
+                <div class="value-subtle" id="avg-latency">Avg —</div>
+              </div>
               <div class="chart-stage" style="min-height:96px;margin-top:0" id="chart-rtt"></div>
             </article>
           </div>
@@ -1053,28 +1274,28 @@
             </div>
           </article>
           <div class="charts-grid" style="margin-top:14px">
-            <article class="chart-large">
+            <article class="chart-large" id="zoom-panel-cpu">
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.cpu_usage">CPU Usage</div>
                 <button type="button" class="chart-clip-toggle" data-clip-chart="cpu"></button>
               </div>
               <div class="chart-stage" id="big-chart-cpu"></div>
             </article>
-            <article class="chart-large">
+            <article class="chart-large" id="zoom-panel-memory">
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.memory_usage">Memory Usage</div>
                 <button type="button" class="chart-clip-toggle" data-clip-chart="memory"></button>
               </div>
               <div class="chart-stage" id="big-chart-memory"></div>
             </article>
-            <article class="chart-large">
+            <article class="chart-large" id="zoom-panel-network">
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.network_traffic">Network Traffic</div>
                 <button type="button" class="chart-clip-toggle" data-clip-chart="network"></button>
               </div>
               <div class="chart-stage" id="big-chart-network"></div>
             </article>
-            <article class="chart-large">
+            <article class="chart-large" id="zoom-panel-latency">
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.latency_history">WebSocket RTT</div>
                 <button type="button" class="chart-clip-toggle" data-clip-chart="latency"></button>
@@ -1148,6 +1369,40 @@
       </main>
     </div>
 
+    <div id="chart-modal-overlay" class="chart-modal-overlay" hidden>
+      <section class="chart-modal" role="dialog" aria-modal="true" aria-labelledby="chart-modal-title">
+        <div class="chart-modal-head">
+          <div class="chart-modal-title">
+            <h3 id="chart-modal-title">Chart Detail</h3>
+            <p id="chart-modal-subtitle">Selected window · hover to inspect exact values.</p>
+          </div>
+          <div class="chart-modal-actions">
+            <button type="button" class="chart-clip-toggle" id="chart-modal-clip"></button>
+            <button type="button" class="settings-button" id="chart-modal-close">Close</button>
+          </div>
+        </div>
+        <div class="chart-modal-toolbar">
+          <div class="chart-modal-stat">
+            <div class="label" id="chart-modal-current-label">Current</div>
+            <div class="value" id="chart-modal-current">--</div>
+          </div>
+          <div class="chart-modal-stat">
+            <div class="label" id="chart-modal-average-label">Average</div>
+            <div class="value" id="chart-modal-average">--</div>
+          </div>
+          <div class="chart-modal-stat">
+            <div class="label" id="chart-modal-window-label">History Window</div>
+            <div class="value-subtle" id="chart-modal-range">--</div>
+            <div class="value-subtle" id="chart-modal-window">--</div>
+          </div>
+        </div>
+        <div class="chart-modal-body">
+          <div class="chart-stage chart-modal-stage" id="chart-modal-stage"></div>
+          <div class="chart-axis chart-modal-axis" id="chart-modal-axis"></div>
+        </div>
+      </section>
+    </div>
+
     <script>
       const PAGE_CONFIG = document.documentElement.dataset;
       const NODE_ID = PAGE_CONFIG.nodeId || "";
@@ -1183,6 +1438,7 @@
       let activeBrushDrag = null;
       let detailRequestVersion = 0;
       let activeTab = "overview";
+      const chartModalState = { key: null };
 
       const chartState = {
         clipSpikes: {
@@ -1222,6 +1478,13 @@
         const primary = I18N[currentLanguage] || {};
         const fallback = I18N.en || {};
         return templateText(primary[key] ?? fallback[key] ?? key, vars);
+      }
+      function applyTranslatableAttributes() {
+        document.querySelectorAll("[data-i18n-aria-label]").forEach((element) => {
+          const text = t(element.dataset.i18nAriaLabel);
+          element.setAttribute("aria-label", text);
+          element.setAttribute("title", text);
+        });
       }
       function languageLabel(language) {
         return (I18N[language] && I18N[language].__label) || language;
@@ -1531,19 +1794,19 @@
           : "";
 
         const latency = node.latency_ms;
-        document.getElementById("latency-value").innerHTML = latency == null
+        document.getElementById("latency-value").textContent = latency == null
           ? "—"
-          : `${Math.round(latency)}<span style="font-size:12px;color:var(--text-muted);font-weight:500;margin-left:4px;">ms</span>`;
+          : formatChartValue(latency, "latency");
 
         document.getElementById("now-cpu").textContent = snapshot.cpu_usage_percent == null
           ? "—"
-          : `${snapshot.cpu_usage_percent.toFixed(0)}%`;
+          : formatChartValue(snapshot.cpu_usage_percent, "percent");
         document.getElementById("now-memory").textContent = memory.total_bytes
-          ? `${((memory.used_bytes / memory.total_bytes) * 100).toFixed(0)}%`
+          ? formatChartValue((memory.used_bytes / memory.total_bytes) * 100, "percent")
           : "—";
         const downRate = snapshot.network?.rx_bytes_per_sec;
         const upRate = snapshot.network?.tx_bytes_per_sec;
-        document.getElementById("now-network").innerHTML = `<span style="color:var(--accent-green);">↓ ${escapeHtml(fmtRate(downRate))}</span> · <span style="color:var(--accent-purple);">↑ ${escapeHtml(fmtRate(upRate))}</span>`;
+        document.getElementById("now-network").innerHTML = metricPairMarkup(fmtRate(downRate), fmtRate(upRate));
 
         if (document.getElementById("net-down-rate")) {
           document.getElementById("net-down-rate").innerHTML = `${escapeHtml(fmtRate(downRate))}`;
@@ -1825,6 +2088,14 @@
         if (values.length === 0) return null;
         return values.reduce((sum, value) => sum + value, 0) / values.length;
       }
+      function setText(id, value) {
+        const element = document.getElementById(id);
+        if (element) element.textContent = value;
+      }
+      function setHtml(id, value) {
+        const element = document.getElementById(id);
+        if (element) element.innerHTML = value;
+      }
       function chartPoints(history, field) {
         return history.map((p) => ({ ts: p._ts, value: p[field] }));
       }
@@ -1835,6 +2106,38 @@
         if (kind === "rate") return fmtRate(numeric);
         if (kind === "latency") return `${numeric.toFixed(numeric >= 10 ? 0 : 1)} ms`;
         return numeric >= 100 ? numeric.toFixed(0) : numeric.toFixed(1);
+      }
+      function formatAverageSummary(kind, value) {
+        if (value == null) return `${t("node.chart.average_short")} —`;
+        return t("node.chart.average", { value: formatChartValue(value, kind) });
+      }
+      function metricPairMarkup(downText, upText, prefixText = "") {
+        const prefix = prefixText ? `<span class="metric-prefix">${escapeHtml(prefixText)}</span>` : "";
+        return `${prefix}<span class="metric-down">↓ ${escapeHtml(downText)}</span><span class="metric-up">↑ ${escapeHtml(upText)}</span>`;
+      }
+      function buildChartData(history) {
+        const chartHistory = aggregateHistory(history);
+        return {
+          chartHistory,
+          cpuPts: chartPoints(chartHistory, "cpu_usage_percent"),
+          memPts: chartPoints(chartHistory, "memory_used_percent"),
+          dlPts: chartPoints(chartHistory, "rx_bytes_per_sec"),
+          upPts: chartPoints(chartHistory, "tx_bytes_per_sec"),
+          rttPts: chartPoints(chartHistory, "latency_ms"),
+        };
+      }
+      function renderAverageSummaries(data) {
+        setText("avg-cpu", formatAverageSummary("percent", averageValue(data.cpuPts)));
+        setText("avg-memory", formatAverageSummary("percent", averageValue(data.memPts)));
+        setHtml(
+          "avg-network",
+          metricPairMarkup(
+            formatChartValue(averageValue(data.dlPts), "rate"),
+            formatChartValue(averageValue(data.upPts), "rate"),
+            t("node.chart.average_short")
+          )
+        );
+        setText("avg-latency", formatAverageSummary("latency", averageValue(data.rttPts)));
       }
       function chartDisplayBounds(values, options = {}) {
         const bounds = chartBounds(values, options.clipSpikes);
@@ -1893,14 +2196,8 @@
         const avg = averageValue(points);
         if (avg == null) return "";
         const lineY = chartY(avg, bounds, height, padTop, padBottom);
-        const labelY = Math.min(height - padBottom - 10, Math.max(padTop + 12, lineY));
-        const label = escapeHtml(formatChartValue(avg, kind));
-        const labelWidth = Math.max(40, Math.min(86, label.length * 6.4 + 12));
-        const labelX = width - padRight - labelWidth - 2;
         return `
           <line x1="${padLeft}" x2="${width - padRight}" y1="${lineY.toFixed(1)}" y2="${lineY.toFixed(1)}" stroke="${color}" stroke-opacity="${opacity}" stroke-width="1.2" stroke-dasharray="6 5" />
-          <rect x="${labelX.toFixed(1)}" y="${(labelY - 15).toFixed(1)}" width="${labelWidth.toFixed(1)}" height="17" rx="8.5" fill="var(--bg-card)" opacity="0.88" />
-          <text x="${(labelX + labelWidth - 6).toFixed(1)}" y="${(labelY - 3).toFixed(1)}" text-anchor="end" fill="${color}" opacity="0.88" font-size="11">${label}</text>
         `;
       }
       function createHoverGroup() {
@@ -2142,12 +2439,9 @@
       }
 
       function renderOverviewCharts(history) {
-        const chartHistory = aggregateHistory(history);
-        const cpuPts = chartPoints(chartHistory, "cpu_usage_percent");
-        const memPts = chartPoints(chartHistory, "memory_used_percent");
-        const dlPts = chartPoints(chartHistory, "rx_bytes_per_sec");
-        const upPts = chartPoints(chartHistory, "tx_bytes_per_sec");
-        const rttPts = chartPoints(chartHistory, "latency_ms");
+        const data = buildChartData(history);
+        const { chartHistory, cpuPts, memPts, dlPts, upPts, rttPts } = data;
+        renderAverageSummaries(data);
         const hoverGroup = createHoverGroup();
         drawAreaChart("chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu, valueKind: "percent", minValue: 0, label: t("node.cpu_usage"), hoverGroup });
         drawAreaChart("chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory, valueKind: "percent", minValue: 0, label: t("node.memory_usage"), hoverGroup });
@@ -2169,12 +2463,8 @@
 
       function renderBigCharts(history) {
         if (activeTab !== "monitor") return;
-        const chartHistory = aggregateHistory(history);
-        const cpuPts = chartPoints(chartHistory, "cpu_usage_percent");
-        const memPts = chartPoints(chartHistory, "memory_used_percent");
-        const dlPts = chartPoints(chartHistory, "rx_bytes_per_sec");
-        const upPts = chartPoints(chartHistory, "tx_bytes_per_sec");
-        const rttPts = chartPoints(chartHistory, "latency_ms");
+        const data = buildChartData(history);
+        const { cpuPts, memPts, dlPts, upPts, rttPts } = data;
         const hoverGroup = createHoverGroup();
         drawAreaChart("big-chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu, valueKind: "percent", minValue: 0, label: t("node.cpu_usage"), height: 220, hoverGroup });
         drawAreaChart("big-chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory, valueKind: "percent", minValue: 0, label: t("node.memory_usage"), height: 220, hoverGroup });
@@ -2183,6 +2473,109 @@
           { color: "var(--chart-network-up)", label: t("index.node.upload"), points: upPts },
         ], { clipSpikes: chartState.clipSpikes.network, valueKind: "rate", minValue: 0, height: 220, hoverGroup });
         drawAreaChart("big-chart-latency", rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, valueKind: "latency", minValue: 0, label: t("node.latency_history"), height: 220, hoverGroup });
+      }
+      function renderChartModal() {
+        if (!chartModalState.key) return;
+        const overlay = document.getElementById("chart-modal-overlay");
+        if (!overlay || overlay.hidden) return;
+        const data = buildChartData(displayedHistory());
+        const stage = document.getElementById("chart-modal-stage");
+        const axis = document.getElementById("chart-modal-axis");
+        const clip = document.getElementById("chart-modal-clip");
+        const title = document.getElementById("chart-modal-title");
+        const subtitle = document.getElementById("chart-modal-subtitle");
+        const currentLabel = document.getElementById("chart-modal-current-label");
+        const averageLabel = document.getElementById("chart-modal-average-label");
+        const windowLabel = document.getElementById("chart-modal-window-label");
+        const currentValue = document.getElementById("chart-modal-current");
+        const averageValueEl = document.getElementById("chart-modal-average");
+        const rangeValue = document.getElementById("chart-modal-range");
+        const windowValue = document.getElementById("chart-modal-window");
+        const snapshot = latestNode?.snapshot || {};
+        const memory = snapshot.memory || {};
+        const config = {
+          cpu: {
+            title: t("node.cpu_usage"),
+            currentText: snapshot.cpu_usage_percent == null ? "—" : formatChartValue(snapshot.cpu_usage_percent, "percent"),
+            averageText: formatAverageSummary("percent", averageValue(data.cpuPts)),
+            draw() {
+              drawAreaChart(stage, data.cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu, valueKind: "percent", minValue: 0, label: t("node.cpu_usage"), height: 340 });
+              renderTimeAxis("chart-modal-axis", data.chartHistory, "percent");
+            },
+          },
+          memory: {
+            title: t("node.memory_usage"),
+            currentText: memory.total_bytes ? formatChartValue((memory.used_bytes / memory.total_bytes) * 100, "percent") : "—",
+            averageText: formatAverageSummary("percent", averageValue(data.memPts)),
+            draw() {
+              drawAreaChart(stage, data.memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory, valueKind: "percent", minValue: 0, label: t("node.memory_usage"), height: 340 });
+              renderTimeAxis("chart-modal-axis", data.chartHistory, "percent");
+            },
+          },
+          network: {
+            title: t("node.network_traffic"),
+            currentHtml: metricPairMarkup(fmtRate(snapshot.network?.rx_bytes_per_sec), fmtRate(snapshot.network?.tx_bytes_per_sec)),
+            averageHtml: metricPairMarkup(formatChartValue(averageValue(data.dlPts), "rate"), formatChartValue(averageValue(data.upPts), "rate"), t("node.chart.average_short")),
+            draw() {
+              drawMultiAreaChart(stage, [
+                { color: "var(--chart-network-down)", label: t("index.node.download"), points: data.dlPts },
+                { color: "var(--chart-network-up)", label: t("index.node.upload"), points: data.upPts },
+              ], { clipSpikes: chartState.clipSpikes.network, valueKind: "rate", minValue: 0, height: 340 });
+              renderTimeAxis("chart-modal-axis", data.chartHistory, "rate");
+            },
+          },
+          latency: {
+            title: t("node.latency_history"),
+            currentText: latestNode?.latency_ms == null ? "—" : formatChartValue(latestNode.latency_ms, "latency"),
+            averageText: formatAverageSummary("latency", averageValue(data.rttPts)),
+            draw() {
+              drawAreaChart(stage, data.rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, valueKind: "latency", minValue: 0, label: t("node.latency_history"), height: 340 });
+              renderTimeAxis("chart-modal-axis", data.chartHistory, "latency");
+            },
+          },
+        }[chartModalState.key];
+        if (!config || !stage || !axis) return;
+        if (title) title.textContent = config.title;
+        if (subtitle) subtitle.textContent = t("node.chart.detail_subtitle");
+        if (currentLabel) currentLabel.textContent = t("node.chart.current");
+        if (averageLabel) averageLabel.textContent = t("node.chart.average_short");
+        if (windowLabel) windowLabel.textContent = t("node.history_window");
+        if (currentValue) {
+          currentValue.className = config.currentHtml ? "value panel-meta-pair" : "value";
+          if (config.currentHtml) currentValue.innerHTML = config.currentHtml;
+          else currentValue.textContent = config.currentText || "—";
+        }
+        if (averageValueEl) {
+          averageValueEl.className = config.averageHtml ? "value panel-meta-pair" : "value";
+          if (config.averageHtml) averageValueEl.innerHTML = config.averageHtml;
+          else averageValueEl.textContent = config.averageText || `${t("node.chart.average_short")} —`;
+        }
+        if (rangeValue) {
+          rangeValue.textContent = chartState.selectedStartMs != null && chartState.selectedEndMs != null
+            ? t("node.window.range", { start: fmtDateTime(chartState.selectedStartMs), end: fmtDateTime(chartState.selectedEndMs) })
+            : "—";
+        }
+        if (windowValue) windowValue.textContent = formatWindowHeadline();
+        if (clip) clip.dataset.clipChart = chartModalState.key;
+        syncChartClipButtons();
+        config.draw();
+      }
+      function openChartModal(key) {
+        chartModalState.key = key;
+        const overlay = document.getElementById("chart-modal-overlay");
+        if (!overlay) return;
+        overlay.hidden = false;
+        document.body.style.overflow = "hidden";
+        renderChartModal();
+        window.requestAnimationFrame(() => {
+          if (chartModalState.key === key) renderChartModal();
+        });
+      }
+      function closeChartModal() {
+        chartModalState.key = null;
+        const overlay = document.getElementById("chart-modal-overlay");
+        if (overlay) overlay.hidden = true;
+        document.body.style.overflow = "";
       }
 
       function renderTimeAxis(id, history, kind) {
@@ -2467,6 +2860,11 @@
           });
         }
         document.addEventListener("click", (e) => {
+          const zoom = e.target.closest("[data-zoom-chart]");
+          if (zoom) {
+            openChartModal(zoom.dataset.zoomChart);
+            return;
+          }
           const toggle = e.target.closest("[data-clip-chart]");
           if (!toggle) return;
           const chart = toggle.dataset.clipChart;
@@ -2474,6 +2872,7 @@
           syncControls();
           renderOverviewCharts(displayedHistory());
           renderBigCharts(displayedHistory());
+          renderChartModal();
         });
         const brushStage = document.getElementById("history-brush-stage");
         const brushSelection = document.getElementById("history-brush-selection");
@@ -2492,6 +2891,13 @@
             void fetchDetailHistory();
           });
         }
+        document.getElementById("chart-modal-close")?.addEventListener("click", closeChartModal);
+        document.getElementById("chart-modal-overlay")?.addEventListener("click", (event) => {
+          if (event.target === event.currentTarget) closeChartModal();
+        });
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape" && chartModalState.key) closeChartModal();
+        });
         syncControls();
       }
 
@@ -2500,6 +2906,8 @@
         document.documentElement.lang = currentLanguage;
         document.title = t("node.page_title");
         document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+        applyTranslatableAttributes();
+        setText("chart-modal-close", t("common.close"));
         renderBrushOverview();
         syncControls();
         if (latestNode) {
@@ -2516,6 +2924,7 @@
         const history = displayedHistory();
         renderOverviewCharts(history);
         renderBigCharts(history);
+        renderChartModal();
       }
       function scheduleRefresh() {
         if (refreshTimer != null) window.clearTimeout(refreshTimer);
