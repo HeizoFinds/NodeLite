@@ -8,7 +8,9 @@ use axum::body::{Body, to_bytes};
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::middleware::{from_fn, from_fn_with_state};
+use axum::routing::{get, post};
 use chrono::Utc;
+use ipnet::IpNet;
 use serde_json::json;
 use tokio::runtime::Runtime;
 use tower::util::ServiceExt;
@@ -21,7 +23,7 @@ use crate::admission::{
     InstallAdmissionConfig, InstallAdmissionController, WsAdmissionController, WsAdmissionError,
     resolve_client_ip, sweep_expired_auth_failures,
 };
-use crate::audit::{AuditEvent, AuditEventType, NewAuditEvent};
+use crate::audit::{AuditEvent, AuditEventType, AuditQuery, NewAuditEvent};
 use crate::auth::{ReadonlyRouteAuth, TwoFactorSessions};
 use crate::handlers::{
     audit_log, bootstrap, brand_logo_dark_asset, brand_logo_light_asset, healthz, index,
@@ -36,10 +38,9 @@ use crate::sanitize::{
     sanitize_snapshot, should_disconnect_for_metric_anomalies, truncate_to_byte_boundary,
     update_metric_anomaly_window,
 };
-use crate::test_support::{test_server_config, test_ws_config};
+use crate::test_support::{TEST_BASIC_AUTH_HEADER, test_server_config, test_ws_config};
 use crate::ui::index_page_csp;
 use crate::ws::ws_handler;
-use axum::routing::get;
 use nodelite_proto::{NodeSnapshot, ServerConfig, WsConfig};
 use tower_http::trace::TraceLayer;
 
@@ -369,6 +370,266 @@ fn protected_routes_attach_security_headers() {
 }
 
 #[test]
+fn readonly_auth_route_accepts_valid_basic_auth() {
+    let runtime = Runtime::new().expect("runtime should build");
+    runtime.block_on(async {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("nodelite-readonly-auth-ok-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+        let registry_path = temp_dir.join("server.json");
+        let config = test_server_config(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+            "https://monitor.example.com".to_string(),
+            registry_path,
+            temp_dir.join("history.sqlite3"),
+            temp_dir.join("snapshot.json"),
+        );
+        let state = AppState::test_fixture(config.into(), Arc::new(temp_dir.join("server.toml")))
+            .await
+            .expect("state fixture should build");
+        let app: Router = Router::new()
+            .route("/api/overview", get(protected_ok))
+            .route_layer(from_fn_with_state(state.clone(), require_readonly_auth))
+            .with_state(state);
+        let response = app
+            .oneshot(protected_request(
+                "GET",
+                "/api/overview",
+                Some(TEST_BASIC_AUTH_HEADER),
+                SocketAddr::V4(SocketAddrV4::new(
+                    "198.51.100.24".parse().expect("ip"),
+                    51234,
+                )),
+            ))
+            .await
+            .expect("response should be produced");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    });
+}
+
+#[test]
+fn readonly_auth_route_logs_missing_basic_auth_reason() {
+    let runtime = Runtime::new().expect("runtime should build");
+    runtime.block_on(async {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("nodelite-readonly-auth-missing-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+        let registry_path = temp_dir.join("server.json");
+        let config = test_server_config(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+            "https://monitor.example.com".to_string(),
+            registry_path,
+            temp_dir.join("history.sqlite3"),
+            temp_dir.join("snapshot.json"),
+        );
+        let state = AppState::test_fixture(config.into(), Arc::new(temp_dir.join("server.toml")))
+            .await
+            .expect("state fixture should build");
+        let app: Router = Router::new()
+            .route("/api/overview", get(protected_ok))
+            .route_layer(from_fn_with_state(state.clone(), require_readonly_auth))
+            .with_state(state.clone());
+        let response = app
+            .oneshot(protected_request(
+                "GET",
+                "/api/overview",
+                None,
+                SocketAddr::V4(SocketAddrV4::new(
+                    "198.51.100.24".parse().expect("ip"),
+                    51234,
+                )),
+            ))
+            .await
+            .expect("response should be produced");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let events = state
+            .audit_log
+            .query(AuditQuery {
+                start: None,
+                end: None,
+                event_type: Some(AuditEventType::LoginFailure),
+                success: Some(false),
+                limit: 4,
+            })
+            .await
+            .expect("audit query should succeed");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].details["reason"], "missing_basic_auth");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    });
+}
+
+#[test]
+fn readonly_auth_route_blocks_after_repeated_invalid_credentials() {
+    let runtime = Runtime::new().expect("runtime should build");
+    runtime.block_on(async {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("nodelite-readonly-auth-block-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+        let registry_path = temp_dir.join("server.json");
+        let mut config = test_server_config(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+            "https://monitor.example.com".to_string(),
+            registry_path,
+            temp_dir.join("history.sqlite3"),
+            temp_dir.join("snapshot.json"),
+        );
+        config.ws.auth_fail_max_attempts = 2;
+        config.ws.auth_block_secs = 1;
+        let state = AppState::test_fixture(config.into(), Arc::new(temp_dir.join("server.toml")))
+            .await
+            .expect("state fixture should build");
+        let app: Router = Router::new()
+            .route("/api/overview", get(protected_ok))
+            .route_layer(from_fn_with_state(state.clone(), require_readonly_auth))
+            .with_state(state.clone());
+        let peer_addr = SocketAddr::V4(SocketAddrV4::new(
+            "198.51.100.24".parse().expect("ip"),
+            51234,
+        ));
+
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(protected_request(
+                    "GET",
+                    "/api/overview",
+                    Some("Basic Zm9vOmJhcg=="),
+                    peer_addr,
+                ))
+                .await
+                .expect("response should be produced");
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        let blocked = app
+            .oneshot(protected_request(
+                "GET",
+                "/api/overview",
+                Some("Basic Zm9vOmJhcg=="),
+                peer_addr,
+            ))
+            .await
+            .expect("response should be produced");
+        assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(blocked.headers().contains_key(header::RETRY_AFTER));
+
+        let events = state
+            .audit_log
+            .query(AuditQuery {
+                start: None,
+                end: None,
+                event_type: None,
+                success: Some(false),
+                limit: 8,
+            })
+            .await
+            .expect("audit query should succeed");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == AuditEventType::LoginFailure
+                    && event.details["reason"] == "invalid_basic_auth")
+        );
+        assert!(events.iter().any(
+            |event| event.event_type == AuditEventType::RateLimitExceeded
+                && event.details["reason"] == "readonly_auth_block"
+        ));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    });
+}
+
+#[test]
+fn sensitive_readonly_routes_use_stricter_budget_and_unblock_after_window() {
+    let runtime = Runtime::new().expect("runtime should build");
+    runtime.block_on(async {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("nodelite-sensitive-readonly-auth-block-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+        let registry_path = temp_dir.join("server.json");
+        let mut config = test_server_config(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+            "https://monitor.example.com".to_string(),
+            registry_path,
+            temp_dir.join("history.sqlite3"),
+            temp_dir.join("snapshot.json"),
+        );
+        config.ws.auth_fail_max_attempts = 4;
+        config.ws.auth_block_secs = 1;
+        let state = AppState::test_fixture(config.into(), Arc::new(temp_dir.join("server.toml")))
+            .await
+            .expect("state fixture should build");
+        let app: Router = Router::new()
+            .route("/api/settings/password", post(protected_ok))
+            .route_layer(from_fn_with_state(state.clone(), require_readonly_auth))
+            .with_state(state);
+        let peer_addr = SocketAddr::V4(SocketAddrV4::new(
+            "198.51.100.24".parse().expect("ip"),
+            51234,
+        ));
+
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(protected_request(
+                    "POST",
+                    "/api/settings/password",
+                    Some("Basic Zm9vOmJhcg=="),
+                    peer_addr,
+                ))
+                .await
+                .expect("response should be produced");
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        let blocked = app
+            .clone()
+            .oneshot(protected_request(
+                "POST",
+                "/api/settings/password",
+                Some("Basic Zm9vOmJhcg=="),
+                peer_addr,
+            ))
+            .await
+            .expect("response should be produced");
+        assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+        let unblocked = app
+            .oneshot(protected_request(
+                "POST",
+                "/api/settings/password",
+                Some(TEST_BASIC_AUTH_HEADER),
+                peer_addr,
+            ))
+            .await
+            .expect("response should be produced");
+        assert_eq!(unblocked.status(), StatusCode::OK);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    });
+}
+
+#[test]
 fn audit_log_route_returns_recent_filtered_events() {
     let runtime = Runtime::new().expect("runtime should build");
     runtime.block_on(async {
@@ -491,6 +752,7 @@ fn sanitize_snapshot_clamps_invalid_metrics() {
         listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
         public_base_url: "http://127.0.0.1:8080".to_string(),
         insecure_allow_http: false,
+        trusted_proxies: Vec::new(),
         readonly_auth: None,
         ws: WsConfig {
             max_total_connections: 32,
@@ -613,6 +875,7 @@ fn sanitize_caps_disk_field_string_length() {
         listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
         public_base_url: "http://127.0.0.1:8080".to_string(),
         insecure_allow_http: false,
+        trusted_proxies: Vec::new(),
         readonly_auth: None,
         ws: WsConfig {
             max_total_connections: 32,
@@ -698,6 +961,7 @@ fn sanitize_snapshot_caps_disk_count_and_tracks_clean_reports() {
         listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
         public_base_url: "http://127.0.0.1:8080".to_string(),
         insecure_allow_http: false,
+        trusted_proxies: Vec::new(),
         readonly_auth: None,
         ws: WsConfig {
             max_total_connections: 32,
@@ -800,6 +1064,7 @@ fn sanitize_snapshot_deduplicates_repeated_disk_devices() {
         listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
         public_base_url: "http://127.0.0.1:8080".to_string(),
         insecure_allow_http: false,
+        trusted_proxies: Vec::new(),
         readonly_auth: None,
         ws: WsConfig {
             max_total_connections: 32,
@@ -930,6 +1195,32 @@ fn truncate_to_byte_boundary_handles_utf8_widths_with_bounded_scan() {
     }
 }
 
+fn trusted_proxies(cidrs: &[&str]) -> Vec<IpNet> {
+    cidrs
+        .iter()
+        .map(|cidr| cidr.parse::<IpNet>().expect("valid cidr"))
+        .collect()
+}
+
+async fn protected_ok() -> StatusCode {
+    StatusCode::OK
+}
+
+fn protected_request(
+    method: &str,
+    uri: &str,
+    auth_header: Option<&str>,
+    peer_addr: SocketAddr,
+) -> Request<Body> {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(auth_header) = auth_header {
+        builder = builder.header(header::AUTHORIZATION, auth_header);
+    }
+    let mut request = builder.body(Body::empty()).expect("request should build");
+    request.extensions_mut().insert(ConnectInfo(peer_addr));
+    request
+}
+
 #[test]
 fn loopback_proxy_peer_uses_forwarded_ip_for_ws_limits() {
     let mut headers = HeaderMap::new();
@@ -939,7 +1230,7 @@ fn loopback_proxy_peer_uses_forwarded_ip_for_ws_limits() {
     );
 
     let client_ip = resolve_client_ip(
-        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+        &[],
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 51234)),
         &headers,
     );
@@ -956,7 +1247,7 @@ fn public_listener_behind_local_proxy_uses_forwarded_ip() {
     );
 
     let client_ip = resolve_client_ip(
-        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8080)),
+        &[],
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 51234)),
         &headers,
     );
@@ -970,7 +1261,7 @@ fn public_direct_peer_ignores_spoofed_forwarded_ip() {
     headers.insert("x-forwarded-for", "8.8.8.8".parse().expect("header value"));
 
     let client_ip = resolve_client_ip(
-        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8080)),
+        &[],
         SocketAddr::V4(SocketAddrV4::new(
             "198.51.100.24".parse().expect("ip"),
             51234,
@@ -982,18 +1273,21 @@ fn public_direct_peer_ignores_spoofed_forwarded_ip() {
 }
 
 #[test]
-fn rightmost_forwarded_ip_is_preferred_over_spoofed_leftmost() {
-    // 反代会把客户端发来的 XFF 与真实远端 IP 顺序拼接,真实 IP 出现在最右侧。
-    // 最左端可能是客户端伪造的值,绝不能用来做"信任来源"判定。
+fn trusted_proxy_chain_uses_last_untrusted_forwarded_ip() {
     let mut headers = HeaderMap::new();
     headers.insert(
         "x-forwarded-for",
-        "8.8.8.8, 198.51.100.24".parse().expect("header value"),
+        "8.8.8.8, 198.51.100.24, 203.0.113.11"
+            .parse()
+            .expect("header value"),
     );
 
     let client_ip = resolve_client_ip(
-        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
-        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 51234)),
+        &trusted_proxies(&["203.0.113.0/24"]),
+        SocketAddr::V4(SocketAddrV4::new(
+            "203.0.113.10".parse().expect("ip"),
+            51234,
+        )),
         &headers,
     );
 
@@ -1001,18 +1295,33 @@ fn rightmost_forwarded_ip_is_preferred_over_spoofed_leftmost() {
 }
 
 #[test]
-fn x_real_ip_takes_precedence_over_forwarded_for() {
-    // Nginx 推荐同时下发 X-Real-IP 与 X-Forwarded-For;X-Real-IP 来自反代
-    // 本身的 $remote_addr,客户端无法影响,优先级最高。
+fn trusted_proxy_prefers_x_real_ip_when_forwarded_chain_is_absent() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-real-ip", "198.51.100.24".parse().expect("header value"));
+
+    let client_ip = resolve_client_ip(
+        &trusted_proxies(&["203.0.113.0/24"]),
+        SocketAddr::V4(SocketAddrV4::new(
+            "203.0.113.10".parse().expect("ip"),
+            51234,
+        )),
+        &headers,
+    );
+
+    assert_eq!(client_ip, IpAddr::V4("198.51.100.24".parse().expect("ip")));
+}
+
+#[test]
+fn malformed_forwarded_chain_falls_back_to_x_real_ip() {
     let mut headers = HeaderMap::new();
     headers.insert(
         "x-forwarded-for",
-        "8.8.8.8, 1.1.1.1".parse().expect("header value"),
+        "8.8.8.8, invalid-ip".parse().expect("header value"),
     );
     headers.insert("x-real-ip", "198.51.100.24".parse().expect("header value"));
 
     let client_ip = resolve_client_ip(
-        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+        &[],
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 51234)),
         &headers,
     );

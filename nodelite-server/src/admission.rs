@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use ipnet::IpNet;
 use nodelite_proto::WsConfig;
 
 /// 软上限:超过后顺手扫一次表清掉已过期条目。攻击者用大量伪造 IP 制造
@@ -26,6 +27,25 @@ const INSTALL_AUTH_FAILURE_TABLE_SOFT_LIMIT: usize = 1024;
 pub struct AuthFailureState {
     pub recent_failures: VecDeque<Instant>,
     pub blocked_until: Option<Instant>,
+}
+
+pub fn auth_failure_admission_config(ws: &WsConfig) -> InstallAdmissionConfig {
+    InstallAdmissionConfig {
+        auth_fail_window_secs: ws.auth_fail_window_secs,
+        auth_fail_max_attempts: ws.auth_fail_max_attempts,
+        auth_block_secs: ws.auth_block_secs,
+    }
+}
+
+/// 敏感写操作沿用同一失败窗口与封禁时长,但尝试预算更低:
+/// 例如密码修改、2FA 开关、服务端自更新这些路径不应允许和只读看板一样多的
+/// 猜测机会。
+pub fn sensitive_auth_failure_admission_config(ws: &WsConfig) -> InstallAdmissionConfig {
+    InstallAdmissionConfig {
+        auth_fail_window_secs: ws.auth_fail_window_secs,
+        auth_fail_max_attempts: (ws.auth_fail_max_attempts / 2).max(1),
+        auth_block_secs: ws.auth_block_secs,
+    }
 }
 
 /// WebSocket 准入控制器:封装总量限流、IP 限流与认证失败封禁。
@@ -269,40 +289,62 @@ impl InstallAdmissionController {
 
 /// 解析客户端真实 IP。
 ///
-/// 当 TCP 直连对端是本机反代时,允许读取 `X-Forwarded-For` / `X-Real-IP`;
-/// 其他直连请求一律使用 socket peer IP,避免公网客户端伪造代理头。
+/// 仅当 TCP 直连对端属于可信代理(默认含 loopback)时,才会解析
+/// `X-Forwarded-For` / `X-Real-IP`;其他直连请求一律使用 socket peer IP,
+/// 避免公网客户端伪造代理头。
 pub fn resolve_client_ip(
-    _listen: SocketAddr,
+    trusted_proxies: &[IpNet],
     peer_addr: SocketAddr,
     headers: &HeaderMap,
 ) -> IpAddr {
-    if !peer_addr.ip().is_loopback() {
+    if !ip_is_trusted_proxy(peer_addr.ip(), trusted_proxies) {
         return peer_addr.ip();
     }
 
-    forwarded_ip_from_headers(headers).unwrap_or_else(|| peer_addr.ip())
+    forwarded_ip_from_headers(peer_addr.ip(), trusted_proxies, headers)
+        .unwrap_or_else(|| peer_addr.ip())
 }
 
-fn forwarded_ip_from_headers(headers: &HeaderMap) -> Option<IpAddr> {
-    // 优先信任直连反代写入的 X-Real-IP(Nginx 等会把它设为反代看到的对端 IP);
-    // 退而求其次取 X-Forwarded-For 最右端 —— 该位置由可信反代追加,
-    // 最左端则是客户端可任意写入的值,直接使用会被攻击者用来伪造 IP 绕过
-    // 单 IP 限流与认证失败封禁。
-    headers
-        .get("x-real-ip")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(parse_ip_addr)
+fn ip_is_trusted_proxy(ip: IpAddr, trusted_proxies: &[IpNet]) -> bool {
+    ip.is_loopback() || trusted_proxies.iter().any(|network| network.contains(&ip))
+}
+
+fn forwarded_ip_from_headers(
+    peer_ip: IpAddr,
+    trusted_proxies: &[IpNet],
+    headers: &HeaderMap,
+) -> Option<IpAddr> {
+    forwarded_chain_from_header(headers)
+        .and_then(|chain| {
+            chain
+                .into_iter()
+                .rev()
+                .find(|ip| !ip_is_trusted_proxy(*ip, trusted_proxies))
+        })
         .or_else(|| {
             headers
-                .get("x-forwarded-for")
+                .get("x-real-ip")
                 .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.rsplit(',').next())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .and_then(parse_ip_addr)
+                .filter(|ip| *ip != peer_ip)
         })
+}
+
+fn forwarded_chain_from_header(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|segment| !segment.is_empty())
+                .map(parse_ip_addr)
+                .collect::<Option<Vec<_>>>()
+        })
+        .filter(|chain| !chain.is_empty())
 }
 
 fn parse_ip_addr(value: &str) -> Option<IpAddr> {

@@ -13,6 +13,9 @@ use crate::history::HistoryStore;
 use crate::registry::NodeRegistry;
 use crate::state::SharedState;
 
+#[cfg(test)]
+use crate::admission::{auth_failure_admission_config, sensitive_auth_failure_admission_config};
+
 /// 在各处理器之间共享的运行时上下文。
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -23,6 +26,10 @@ pub(crate) struct AppState {
     /// `/api/verify-2fa` 的 IP 维度限流器:与 `install_admission` 同型,
     /// 但实例独立,避免安装接口的失败计数误伤 2FA 登录,反之亦然。
     pub(crate) verify_2fa_admission: InstallAdmissionController,
+    /// 受保护只读页面/API 的 Basic Auth 失败限流器。
+    pub(crate) readonly_auth_admission: InstallAdmissionController,
+    /// `/api/settings/*` 等敏感写操作使用更严格的 Basic Auth 限流器。
+    pub(crate) sensitive_readonly_auth_admission: InstallAdmissionController,
     pub(crate) readiness: ServerReadiness,
     pub(crate) registry: NodeRegistry,
     pub(crate) shared: SharedState,
@@ -96,19 +103,17 @@ impl AppState {
             history,
             agent_logs: AgentLogStore::new(),
             audit_log,
-            install_admission: InstallAdmissionController::new(
-                crate::admission::InstallAdmissionConfig {
-                    auth_fail_window_secs: config.ws.auth_fail_window_secs,
-                    auth_fail_max_attempts: config.ws.auth_fail_max_attempts,
-                    auth_block_secs: config.ws.auth_block_secs,
-                },
+            install_admission: InstallAdmissionController::new(auth_failure_admission_config(
+                &config.ws,
+            )),
+            verify_2fa_admission: InstallAdmissionController::new(auth_failure_admission_config(
+                &config.ws,
+            )),
+            readonly_auth_admission: InstallAdmissionController::new(
+                auth_failure_admission_config(&config.ws),
             ),
-            verify_2fa_admission: InstallAdmissionController::new(
-                crate::admission::InstallAdmissionConfig {
-                    auth_fail_window_secs: config.ws.auth_fail_window_secs,
-                    auth_fail_max_attempts: config.ws.auth_fail_max_attempts,
-                    auth_block_secs: config.ws.auth_block_secs,
-                },
+            sensitive_readonly_auth_admission: InstallAdmissionController::new(
+                sensitive_auth_failure_admission_config(&config.ws),
             ),
             readiness,
             registry,

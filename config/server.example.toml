@@ -8,6 +8,9 @@ public_base_url = "https://monitor.example.com"
 # 仅当你确实需要让面板以明文 HTTP 暴露(例如没有 TLS 终止的隔离测试环境)时
 # 才设置为 true。生产环境务必保持 false。
 insecure_allow_http = false
+# 远端反向代理/WAF 的可信 CIDR。只有当直连 peer 命中这里(或是 loopback)
+# 时,NodeLite 才会解析 X-Forwarded-For / X-Real-IP。留空表示仅信任本机反代。
+trusted_proxies = []
 # 节点凭证文件;Server 与 CLI 都会读写它。
 node_registry_path = "./config/server.json"
 # 历史数据 SQLite 文件,缺失时会在启动时自动创建。

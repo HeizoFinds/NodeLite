@@ -292,6 +292,7 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
 [server]
 listen = "127.0.0.1:28080"
 public_base_url = "https://monitor.example.com"
+trusted_proxies = ["203.0.113.0/24"]
 node_registry_path = "/opt/nodelite/config/server.json"
 history_db_path = "/opt/nodelite/data/history.sqlite3"
 snapshot_path = "/opt/nodelite/data/snapshot.json"
@@ -617,7 +618,7 @@ cargo run -p nodelite-agent -- --config config/agent.toml
 - 如果服务端日志里频繁出现 TLS 警告，说明你还在用 `http://` 或 `ws://` 明文链路。
 - 如果刚关闭 2FA 但服务端因为 `totp_secret` 配置起不来，请升级到 `1.2.16` 或更新版本。
 - 如果子机安装时提示 `invalid install token`，通常是一次性 token 过期了，重新执行一次 `install-agent` 或 `issue-node` 即可。
-- 如果 Agent 被 `/ws` 限流挡住，先检查服务端 `[ws]` 配额是否太小，或者反代是否把所有请求都转成同一个源 IP。
+- 如果 Agent 被 `/ws` 限流挡住，先检查服务端 `[ws]` 配额是否太小，或者远端反代/WAF 的出口网段是否已经写进 `server.trusted_proxies`；同机 Nginx/Caddy 不需要额外配置。
 
 ## GitHub Release
 

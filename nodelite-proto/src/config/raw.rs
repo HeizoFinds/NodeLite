@@ -13,13 +13,13 @@ use super::defaults::{
     default_max_sanitized_string_bytes, default_metric_anomaly_session_limit,
     default_node_registry_path, default_ping_interval_secs, default_refresh_interval_secs,
     default_report_interval_secs, default_snapshot_path, default_sqlite_busy_timeout_secs,
-    default_stale_after_secs, default_ws_auth_block_secs, default_ws_auth_fail_max_attempts,
-    default_ws_auth_fail_window_secs, default_ws_max_connections_per_ip,
-    default_ws_max_total_connections,
+    default_stale_after_secs, default_trusted_proxies, default_ws_auth_block_secs,
+    default_ws_auth_fail_max_attempts, default_ws_auth_fail_window_secs,
+    default_ws_max_connections_per_ip, default_ws_max_total_connections,
 };
 use super::helpers::{
-    normalize_tags, normalize_totp_secret, uses_insecure_remote_public_base_url, validate_sha256,
-    validate_totp_secret, validate_url,
+    normalize_tags, normalize_totp_secret, parse_trusted_proxies,
+    uses_insecure_remote_public_base_url, validate_sha256, validate_totp_secret, validate_url,
 };
 use super::{AgentConfig, AuditConfig, ConfigError, ReadonlyAuthConfig, ServerConfig, WsConfig};
 use crate::validation::{
@@ -57,6 +57,8 @@ struct RawServerSection {
     public_base_url: String,
     #[serde(default)]
     insecure_allow_http: bool,
+    #[serde(default = "default_trusted_proxies")]
+    trusted_proxies: Vec<String>,
     #[serde(default = "default_node_registry_path")]
     node_registry_path: PathBuf,
     #[serde(default = "default_history_db_path")]
@@ -230,6 +232,7 @@ impl RawServerConfigFile {
     pub(super) fn validate(self) -> Result<ServerConfig, ConfigError> {
         let listen = self.parse_listen()?;
         self.validate_public_base_url()?;
+        let trusted_proxies = parse_trusted_proxies(self.server.trusted_proxies.clone())?;
         let install = self.validate_install()?;
         let readonly_auth = self.validate_auth(&listen)?;
         let audit = self.validate_audit()?;
@@ -241,6 +244,7 @@ impl RawServerConfigFile {
             listen,
             public_base_url: self.server.public_base_url,
             insecure_allow_http: self.server.insecure_allow_http,
+            trusted_proxies,
             readonly_auth,
             ws: WsConfig {
                 max_total_connections: self.ws.max_total_connections,

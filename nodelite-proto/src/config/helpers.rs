@@ -1,3 +1,4 @@
+use ipnet::IpNet;
 use url::{Url, form_urlencoded};
 
 use super::{ConfigError, MAX_NODE_TAG_BYTES, MAX_NODE_TAGS};
@@ -96,4 +97,17 @@ pub(super) fn validate_totp_secret(field: &str, value: &str) -> Result<(), Confi
 
 pub(super) fn uses_insecure_remote_public_base_url(public_base_url: &str) -> bool {
     uses_insecure_remote_url(public_base_url, "http")
+}
+
+pub(super) fn parse_trusted_proxies(values: Vec<String>) -> Result<Vec<IpNet>, ConfigError> {
+    normalize_string_list(values)
+        .into_iter()
+        .map(|value| {
+            value.parse::<IpNet>().map_err(|error| {
+                ConfigError::new(format!(
+                    "invalid server.trusted_proxies entry {value:?}: {error}"
+                ))
+            })
+        })
+        .collect()
 }

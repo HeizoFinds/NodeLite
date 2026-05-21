@@ -24,7 +24,7 @@ pub(crate) async fn verify_2fa_api(
     headers: HeaderMap,
     Json(request): Json<Verify2FARequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Verify2FAError>)> {
-    let client_ip = resolve_client_ip(state.shared.config().listen, peer_addr, &headers);
+    let client_ip = resolve_client_ip(&state.shared.config().trusted_proxies, peer_addr, &headers);
     if let Err(retry_after_secs) = state.verify_2fa_admission.check(client_ip) {
         let mut event = NewAuditEvent::now(
             AuditEventType::RateLimitExceeded,
@@ -217,8 +217,10 @@ pub(crate) async fn require_readonly_auth(
     request: Request,
     next: Next,
 ) -> Response {
-    let audit_ip =
-        request_client_ip(&state, &headers, &request).unwrap_or_else(|| "unknown".to_string());
+    let request_path = request.uri().path().to_string();
+    let sensitive_readonly_path = is_sensitive_readonly_path(&request_path, &request);
+    let client_ip = request_client_ip(&state, &headers, &request);
+    let audit_ip = client_ip.to_string();
     let audit_user_agent = user_agent(&headers);
     let auth = state.readonly_auth.read().await;
 
@@ -227,17 +229,55 @@ pub(crate) async fn require_readonly_auth(
         return next.run(request).await;
     }
 
-    if auth.enable_2fa {
-        if cookie_value(&headers, TWO_FACTOR_AUTH_COOKIE)
+    if auth.enable_2fa
+        && cookie_value(&headers, TWO_FACTOR_AUTH_COOKIE)
             .as_deref()
             .is_some_and(|token| state.two_factor_sessions.is_authenticated(token))
-        {
-            drop(auth);
-            return next.run(request).await;
+    {
+        drop(auth);
+        return next.run(request).await;
+    }
+
+    let basic_authorized = auth.is_authorized(&request);
+    let two_factor_enabled = auth.enable_2fa;
+    drop(auth);
+
+    if let Err(retry_after_secs) = state.readonly_auth_admission.check(client_ip) {
+        record_readonly_auth_block(
+            &state,
+            &audit_ip,
+            &audit_user_agent,
+            &request_path,
+            sensitive_readonly_path,
+            retry_after_secs,
+        )
+        .await;
+        return readonly_auth_block_response(retry_after_secs);
+    }
+    if sensitive_readonly_path
+        && let Err(retry_after_secs) = state.sensitive_readonly_auth_admission.check(client_ip)
+    {
+        record_readonly_auth_block(
+            &state,
+            &audit_ip,
+            &audit_user_agent,
+            &request_path,
+            true,
+            retry_after_secs,
+        )
+        .await;
+        return readonly_auth_block_response(retry_after_secs);
+    }
+
+    if basic_authorized {
+        state.readonly_auth_admission.clear_auth_failures(client_ip);
+        if sensitive_readonly_path {
+            state
+                .sensitive_readonly_auth_admission
+                .clear_auth_failures(client_ip);
         }
 
-        if auth.is_authorized(&request) {
-            drop(auth);
+        if two_factor_enabled {
             let pending_token = match state.two_factor_sessions.create_pending() {
                 Ok(token) => token,
                 Err(error) => {
@@ -262,23 +302,27 @@ pub(crate) async fn require_readonly_auth(
             )
                 .into_response();
         }
-    } else if auth.is_authorized(&request) {
-        drop(auth);
+
         return next.run(request).await;
     }
 
-    let two_factor_enabled = auth.enable_2fa;
-    drop(auth);
+    state.readonly_auth_admission.record_auth_failure(client_ip);
+    if sensitive_readonly_path {
+        state
+            .sensitive_readonly_auth_admission
+            .record_auth_failure(client_ip);
+    }
     let mut event = NewAuditEvent::now(AuditEventType::LoginFailure, audit_ip, false);
     event.user_agent = audit_user_agent;
     event.details = json!({
-        "path": request.uri().path(),
+        "path": request_path,
         "reason": if headers.contains_key(header::AUTHORIZATION) {
             "invalid_basic_auth"
         } else {
             "missing_basic_auth"
         },
         "two_factor_enabled": two_factor_enabled,
+        "sensitive_path": sensitive_readonly_path,
     });
     state.audit_log.record_best_effort(event).await;
 
@@ -290,6 +334,42 @@ pub(crate) async fn require_readonly_auth(
         .into_response()
 }
 
+fn is_sensitive_readonly_path(path: &str, request: &Request) -> bool {
+    request.method() != axum::http::Method::GET && path.starts_with("/api/settings/")
+}
+
+async fn record_readonly_auth_block(
+    state: &AppState,
+    audit_ip: &str,
+    audit_user_agent: &Option<String>,
+    request_path: &str,
+    sensitive_path: bool,
+    retry_after_secs: u64,
+) {
+    let mut event = NewAuditEvent::now(
+        AuditEventType::RateLimitExceeded,
+        audit_ip.to_string(),
+        false,
+    );
+    event.user_agent = audit_user_agent.clone();
+    event.details = json!({
+        "path": request_path,
+        "reason": "readonly_auth_block",
+        "retry_after_secs": retry_after_secs,
+        "sensitive_path": sensitive_path,
+    });
+    state.audit_log.record_best_effort(event).await;
+}
+
+fn readonly_auth_block_response(retry_after_secs: u64) -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(header::RETRY_AFTER, retry_after_secs.to_string())],
+        "too many recent authentication failures",
+    )
+        .into_response()
+}
+
 fn user_agent(headers: &HeaderMap) -> Option<String> {
     headers
         .get(header::USER_AGENT)
@@ -297,11 +377,18 @@ fn user_agent(headers: &HeaderMap) -> Option<String> {
         .map(str::to_string)
 }
 
-fn request_client_ip(state: &AppState, headers: &HeaderMap, request: &Request) -> Option<String> {
+fn request_client_ip(state: &AppState, headers: &HeaderMap, request: &Request) -> std::net::IpAddr {
     request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map(|connect_info| {
-            resolve_client_ip(state.shared.config().listen, connect_info.0, headers).to_string()
-        })
+        .map_or(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            |connect_info| {
+                resolve_client_ip(
+                    &state.shared.config().trusted_proxies,
+                    connect_info.0,
+                    headers,
+                )
+            },
+        )
 }

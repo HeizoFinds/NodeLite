@@ -935,6 +935,7 @@ mod tests {
             listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             insecure_allow_http: false,
+            trusted_proxies: Vec::new(),
             readonly_auth: Some(ReadonlyAuthConfig {
                 username: "viewer".to_string(),
                 password: "secret".to_string(),

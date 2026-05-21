@@ -19,7 +19,10 @@ use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
-use crate::admission::{InstallAdmissionConfig, InstallAdmissionController, WsAdmissionController};
+use crate::admission::{
+    InstallAdmissionController, WsAdmissionController, auth_failure_admission_config,
+    sensitive_auth_failure_admission_config,
+};
 use crate::agent_logs::AgentLogStore;
 use crate::app_state::{AppState, ServerReadiness};
 use crate::audit::AuditLog;
@@ -117,20 +120,18 @@ pub(crate) async fn run_server(config_path: &Path) -> Result<()> {
         history,
         agent_logs,
         audit_log: audit_store,
-        install_admission: InstallAdmissionController::new(InstallAdmissionConfig {
-            // 复用 ws 子小节里同名的限流配置 —— 站在运维视角它们是同一组
-            // "认证失败暴力策略"参数,没必要再多开一组。
-            auth_fail_window_secs: config.ws.auth_fail_window_secs,
-            auth_fail_max_attempts: config.ws.auth_fail_max_attempts,
-            auth_block_secs: config.ws.auth_block_secs,
-        }),
-        verify_2fa_admission: InstallAdmissionController::new(InstallAdmissionConfig {
-            // 与 install / ws 同一组阈值,但实例独立 —— 攻击者用 install
-            // 失败把 IP 撞到封禁,不应该把同一时间的合法 2FA 登录也封掉。
-            auth_fail_window_secs: config.ws.auth_fail_window_secs,
-            auth_fail_max_attempts: config.ws.auth_fail_max_attempts,
-            auth_block_secs: config.ws.auth_block_secs,
-        }),
+        install_admission: InstallAdmissionController::new(auth_failure_admission_config(
+            &config.ws,
+        )),
+        verify_2fa_admission: InstallAdmissionController::new(auth_failure_admission_config(
+            &config.ws,
+        )),
+        readonly_auth_admission: InstallAdmissionController::new(auth_failure_admission_config(
+            &config.ws,
+        )),
+        sensitive_readonly_auth_admission: InstallAdmissionController::new(
+            sensitive_auth_failure_admission_config(&config.ws),
+        ),
         readiness,
         registry,
         shared,

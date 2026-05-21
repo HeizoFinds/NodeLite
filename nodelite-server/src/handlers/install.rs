@@ -34,7 +34,7 @@ pub(crate) async fn install_bootstrap(
     headers: HeaderMap,
     request: Request,
 ) -> Response {
-    let client_ip = resolve_client_ip(state.shared.config().listen, peer_addr, &headers);
+    let client_ip = resolve_client_ip(&state.shared.config().trusted_proxies, peer_addr, &headers);
     if let Err(retry_after_secs) = state.install_admission.check(client_ip) {
         let mut event = NewAuditEvent::now(
             AuditEventType::RateLimitExceeded,

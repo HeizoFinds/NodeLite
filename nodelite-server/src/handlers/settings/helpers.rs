@@ -294,6 +294,7 @@ mod tests {
             listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
             public_base_url: "https://example.com".to_string(),
             insecure_allow_http: false,
+            trusted_proxies: Vec::new(),
             readonly_auth: None,
             ws: WsConfig {
                 max_total_connections: 32,

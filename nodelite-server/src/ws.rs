@@ -116,7 +116,7 @@ pub async fn ws_handler(
     ws: WebSocketUpgrade,
 ) -> Response {
     let max_message_bytes = state.shared.config().max_message_bytes;
-    let client_ip = resolve_client_ip(state.shared.config().listen, peer_addr, &headers);
+    let client_ip = resolve_client_ip(&state.shared.config().trusted_proxies, peer_addr, &headers);
     let audit_user_agent = header_user_agent(&headers);
     let connection_permit = match state.ws_admission.try_acquire(client_ip) {
         Ok(permit) => permit,

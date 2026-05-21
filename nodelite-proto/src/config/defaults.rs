@@ -23,6 +23,10 @@ pub(super) fn default_snapshot_path() -> PathBuf {
     PathBuf::from("./data/snapshot.json")
 }
 
+pub(super) fn default_trusted_proxies() -> Vec<String> {
+    Vec::new()
+}
+
 pub(super) fn default_audit_db_path() -> PathBuf {
     PathBuf::from("./data/audit.sqlite3")
 }

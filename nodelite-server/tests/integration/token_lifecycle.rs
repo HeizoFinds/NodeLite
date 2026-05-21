@@ -8,8 +8,10 @@ async fn manual_live_refresh_updates_registry_and_agent_view() -> Result<()> {
         .await?;
     let mut agent = TestAgent::connect(&server, &node).await?;
 
-    let expires_at = server.request_live_token_refresh(&node.node_id).await?;
-    let refresh = agent.wait_for_refresh_response(TEST_TIMEOUT).await?;
+    let (expires_at, refresh) = tokio::try_join!(
+        server.request_live_token_refresh(&node.node_id),
+        agent.wait_for_refresh_response(LIVE_REFRESH_TIMEOUT),
+    )?;
 
     assert_eq!(refresh.expires_at, expires_at.to_rfc3339());
     assert_ne!(refresh.new_token, node.token);
@@ -41,15 +43,13 @@ async fn concurrent_live_refresh_keeps_each_node_consistent() -> Result<()> {
     let mut agent_b = TestAgent::connect(&server, &node_b).await?;
     let mut agent_c = TestAgent::connect(&server, &node_c).await?;
 
-    let (expires_a, expires_b, expires_c) = tokio::try_join!(
+    let (expires_a, expires_b, expires_c, refresh_a, refresh_b, refresh_c) = tokio::try_join!(
         server.request_live_token_refresh(&node_a.node_id),
         server.request_live_token_refresh(&node_b.node_id),
         server.request_live_token_refresh(&node_c.node_id),
-    )?;
-    let (refresh_a, refresh_b, refresh_c) = tokio::try_join!(
-        agent_a.wait_for_refresh_response(TEST_TIMEOUT),
-        agent_b.wait_for_refresh_response(TEST_TIMEOUT),
-        agent_c.wait_for_refresh_response(TEST_TIMEOUT),
+        agent_a.wait_for_refresh_response(LIVE_REFRESH_TIMEOUT),
+        agent_b.wait_for_refresh_response(LIVE_REFRESH_TIMEOUT),
+        agent_c.wait_for_refresh_response(LIVE_REFRESH_TIMEOUT),
     )?;
 
     assert_eq!(refresh_a.expires_at, expires_a.to_rfc3339());

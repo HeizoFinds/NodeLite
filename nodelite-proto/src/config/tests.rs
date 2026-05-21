@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use ipnet::IpNet;
+
 use super::{
     DEFAULT_AUDIT_RETENTION_DAYS, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_WS_AUTH_BLOCK_SECS,
     DEFAULT_WS_AUTH_FAIL_MAX_ATTEMPTS, DEFAULT_WS_AUTH_FAIL_WINDOW_SECS,
@@ -21,6 +23,7 @@ fn parses_server_config_with_defaults() {
     assert_eq!(config.listen.to_string(), "127.0.0.1:8080");
     assert!(!config.insecure_allow_http);
     assert_eq!(config.readonly_auth, None);
+    assert!(config.trusted_proxies.is_empty());
     assert_eq!(config.max_message_bytes, DEFAULT_MAX_MESSAGE_BYTES);
     assert_eq!(
         config.ws.max_total_connections,
@@ -57,6 +60,27 @@ fn parses_server_config_with_defaults() {
 }
 
 #[test]
+fn parses_server_config_with_trusted_proxies() {
+    let config = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+        trusted_proxies = ["203.0.113.0/24", "2001:db8::/32"]
+        "#,
+    )
+    .expect("trusted proxy config should parse");
+
+    assert_eq!(
+        config.trusted_proxies,
+        vec![
+            "2001:db8::/32".parse::<IpNet>().expect("ipv6 cidr"),
+            "203.0.113.0/24".parse::<IpNet>().expect("ipv4 cidr"),
+        ]
+    );
+}
+
+#[test]
 fn rejects_invalid_server_listen_address() {
     let error = parse_server_config(
         r#"
@@ -68,6 +92,21 @@ fn rejects_invalid_server_listen_address() {
     .expect_err("invalid config should fail");
 
     assert!(error.to_string().contains("server.listen"));
+}
+
+#[test]
+fn rejects_invalid_trusted_proxy_cidr() {
+    let error = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+        trusted_proxies = ["not-a-cidr"]
+        "#,
+    )
+    .expect_err("invalid trusted proxy cidr should fail");
+
+    assert!(error.to_string().contains("server.trusted_proxies"));
 }
 
 #[test]

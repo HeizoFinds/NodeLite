@@ -14,6 +14,7 @@ mod tests;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 
 use self::defaults::{
@@ -109,6 +110,7 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     pub public_base_url: String,
     pub insecure_allow_http: bool,
+    pub trusted_proxies: Vec<IpNet>,
     pub readonly_auth: Option<ReadonlyAuthConfig>,
     pub ws: WsConfig,
     pub audit: AuditConfig,

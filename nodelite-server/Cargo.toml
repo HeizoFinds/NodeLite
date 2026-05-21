@@ -17,6 +17,7 @@ clap.workspace = true
 futures.workspace = true
 getrandom.workspace = true
 hex.workspace = true
+ipnet.workspace = true
 libc.workspace = true
 qrcode.workspace = true
 rusqlite.workspace = true
