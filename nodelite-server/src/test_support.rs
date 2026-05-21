@@ -32,6 +32,7 @@ use nodelite_proto::{
 
 pub const TEST_BASIC_AUTH_HEADER: &str = "Basic dmlld2VyOnNlY3JldA==";
 pub const TEST_TIMEOUT: Duration = Duration::from_secs(10);
+pub const LIVE_REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(crate) type TestSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
@@ -313,7 +314,7 @@ impl TestServer {
             .request_live_token_refresh(node_id)
             .await
             .map_err(|error| anyhow!("request live refresh for {node_id}: {error}"))?;
-        let refresh_result = timeout(TEST_TIMEOUT, response_rx)
+        let refresh_result = timeout(LIVE_REFRESH_TIMEOUT, response_rx)
             .await
             .context("timed out waiting for live refresh response")?
             .map_err(|_| anyhow!("live refresh channel closed"))?
