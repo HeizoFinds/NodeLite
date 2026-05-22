@@ -85,22 +85,22 @@ pub(crate) async fn run_server(config_path: &Path) -> Result<()> {
     restore_snapshot_if_available(&shared, config.snapshot_path.as_path()).await;
 
     let shutdown = CancellationToken::new();
-    let mut background_tasks: Vec<JoinHandle<()>> = Vec::new();
-
-    background_tasks.push(spawn_registry_reloader(
-        registry.clone(),
-        history.clone(),
-        agent_logs.clone(),
-        readiness.clone(),
-        shutdown.clone(),
-    ));
-    background_tasks.push(audit_store.spawn_pruner(shutdown.clone()));
-    background_tasks.push(spawn_stale_reaper(shared.clone(), shutdown.clone()));
-    background_tasks.push(spawn_snapshot_persistor(
-        shared.clone(),
-        config.snapshot_path.clone(),
-        shutdown.clone(),
-    ));
+    let mut background_tasks: Vec<JoinHandle<()>> = vec![
+        spawn_registry_reloader(
+            registry.clone(),
+            history.clone(),
+            agent_logs.clone(),
+            readiness.clone(),
+            shutdown.clone(),
+        ),
+        audit_store.spawn_pruner(shutdown.clone()),
+        spawn_stale_reaper(shared.clone(), shutdown.clone()),
+        spawn_snapshot_persistor(
+            shared.clone(),
+            config.snapshot_path.clone(),
+            shutdown.clone(),
+        ),
+    ];
     if let Some(handle) = spawn_insecure_transport_warning(
         config.public_base_url.clone(),
         config.listen,
