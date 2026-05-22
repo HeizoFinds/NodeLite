@@ -45,8 +45,9 @@
         margin: 0;
         color: var(--text-primary);
         background:
-          radial-gradient(circle at top left, rgba(59, 130, 246, 0.08), transparent 26%),
-          linear-gradient(180deg, #f8faff 0%, var(--bg-app) 240px);
+          radial-gradient(circle at 18% 0%, rgba(59, 130, 246, 0.08), transparent 28%),
+          radial-gradient(circle at 82% 8%, rgba(168, 85, 247, 0.05), transparent 24%),
+          linear-gradient(180deg, #f8faff 0%, #f1f5fb 100%);
         font-size: 15px;
         line-height: 1.6;
         -webkit-font-smoothing: antialiased;
@@ -60,7 +61,7 @@
       /* ---------- Layout ---------- */
       .app {
         display: grid;
-        grid-template-columns: 236px minmax(0, 1fr);
+        grid-template-columns: 248px minmax(0, 1fr);
         min-height: 100vh;
       }
 
@@ -80,7 +81,7 @@
       .brand {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 12px;
         font-size: 20px;
         font-weight: 700;
         letter-spacing: -0.02em;
@@ -95,17 +96,20 @@
         font-size: 12px;
         font-weight: 500;
       }
-      .brand-icon {
-        width: 32px;
-        height: 32px;
-        border-radius: 10px;
-        background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-        display: grid;
-        place-items: center;
-        color: #fff;
-        font-size: 16px;
-        font-weight: 700;
+      .brand-mark {
+        width: 44px;
+        height: 44px;
+        border-radius: 14px;
+        overflow: hidden;
         flex-shrink: 0;
+        box-shadow: 0 10px 24px rgba(59, 130, 246, 0.18);
+        background: #fff;
+      }
+      .brand-mark img {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: cover;
       }
       .nav-group {
         margin-bottom: 20px;
@@ -169,12 +173,13 @@
 
       /* ---------- Main ---------- */
       .main {
-        padding: 32px clamp(24px, 4vw, 48px) 60px;
-        max-width: 1040px;
+        padding: 36px clamp(28px, 4vw, 56px) 72px;
+        max-width: 1480px;
         width: 100%;
+        margin: 0 auto;
       }
       .page-header {
-        margin-bottom: 28px;
+        margin-bottom: 40px;
       }
       .eyebrow {
         display: inline-flex;
@@ -201,39 +206,40 @@
         margin: 10px 0 0;
         color: var(--text-muted);
         font-size: 16px;
-        max-width: 720px;
+        max-width: 920px;
       }
       .hero {
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.78));
-        border: 1px solid var(--border-soft);
-        border-radius: 24px;
-        padding: 28px;
-        box-shadow: var(--shadow-soft);
+        margin-top: 26px;
       }
       .hero-grid {
         display: grid;
-        grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.8fr);
-        gap: 18px;
-        margin-top: 24px;
+        grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.95fr);
+        gap: 22px;
+        align-items: stretch;
       }
       .hero-panel,
       .hero-mini {
-        background: rgba(246, 248, 252, 0.82);
+        background: rgba(255, 255, 255, 0.9);
         border: 1px solid var(--border-soft);
-        border-radius: 18px;
-        padding: 18px;
+        border-radius: 26px;
+        padding: 28px;
+        box-shadow: var(--shadow-soft);
       }
       .hero-panel h2,
       .hero-mini h2 {
         margin: 0 0 8px;
-        font-size: 16px;
+        font-size: 18px;
         letter-spacing: -0.01em;
       }
       .hero-panel p,
       .hero-mini p {
         margin: 0;
         color: var(--text-muted);
-        font-size: 14px;
+        font-size: 15px;
+      }
+      .hero-mini {
+        display: flex;
+        flex-direction: column;
       }
       .hero-actions {
         display: flex;
@@ -262,23 +268,25 @@
       .stats-row {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
-        margin-top: 16px;
+        gap: 12px;
+        margin-top: 18px;
       }
       .stat-pill {
-        background: var(--bg-card);
+        background: var(--bg-card-soft);
         border: 1px solid var(--border-soft);
-        border-radius: 14px;
-        padding: 14px;
+        border-radius: 18px;
+        padding: 16px;
+        min-height: 116px;
       }
       .stat-pill strong {
         display: block;
         font-size: 18px;
         letter-spacing: -0.02em;
+        line-height: 1.15;
       }
       .stat-pill span {
         display: block;
-        margin-top: 4px;
+        margin-top: 8px;
         color: var(--text-muted);
         font-size: 12px;
       }
@@ -316,10 +324,16 @@
         margin: 0;
         font-size: 13px;
       }
+      .hero-points {
+        margin-top: 14px;
+      }
+      .hero-points li {
+        color: var(--text-secondary);
+      }
 
       /* ---------- Section ---------- */
       .section {
-        margin-bottom: 48px;
+        margin-bottom: 56px;
       }
       .section-title {
         font-size: 20px;
@@ -362,6 +376,13 @@
       }
       .content-grid.two-up {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .content-grid.columns-2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .content-grid.feature-split {
+        grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+        align-items: start;
       }
       .card-icon {
         width: 40px;
@@ -562,34 +583,6 @@
         color: var(--text-muted);
         font-size: 13px;
       }
-      .jump-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 12px;
-        margin-top: 16px;
-      }
-      .jump-card {
-        display: block;
-        padding: 16px;
-        border-radius: 16px;
-        background: var(--bg-card-soft);
-        border: 1px solid var(--border-soft);
-        box-shadow: var(--shadow-card);
-        transition: transform 140ms ease, border-color 140ms ease;
-      }
-      .jump-card:hover {
-        transform: translateY(-1px);
-        border-color: var(--border-strong);
-      }
-      .jump-card strong {
-        display: block;
-        margin-bottom: 4px;
-        font-size: 14px;
-      }
-      .jump-card span {
-        color: var(--text-muted);
-        font-size: 13px;
-      }
       .footer {
         margin-top: 48px;
         padding-top: 20px;
@@ -636,11 +629,11 @@
         .main { padding: 20px 16px 40px; }
         .page-header h1 { font-size: 28px; }
         .page-header p { font-size: 15px; }
-        .hero { padding: 20px; border-radius: 20px; }
         .hero-grid,
         .stats-row,
         .content-grid.two-up,
-        .jump-grid { grid-template-columns: 1fr; }
+        .content-grid.columns-2,
+        .content-grid.feature-split { grid-template-columns: 1fr; }
         .card { padding: 20px; }
         .faq-card { padding: 8px 20px; }
       }
@@ -666,7 +659,9 @@
       <!-- Sidebar -->
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-icon">N</div>
+          <div class="brand-mark">
+            <img src="./assets/brand-logo-light.webp" alt="NodeLite" />
+          </div>
           <div class="brand-copy">
             NodeLite
             <small>Quick Deploy Guide</small>
@@ -732,7 +727,12 @@
               </div>
               <div class="hero-mini">
                 <h2>推荐拓扑</h2>
-                <p>服务端监听 <code>127.0.0.1:8080</code>，对外通过 Nginx 或 Caddy 提供 <code>HTTPS</code> 与 <code>WSS</code>，Agent 统一接入 <code>/ws</code>。</p>
+                <p>服务端监听 <code>127.0.0.1:8080</code>，对外通过 Nginx 或 Caddy 提供 <code>HTTPS</code> 与 <code>WSS</code>，Agent 统一接入 <code>/ws</code>，<code>/metrics</code> 可直接被 Prometheus 抓取。</p>
+                <ul class="mini-list hero-points">
+                  <li>对外只开放 <code>443</code>，服务端本身保持监听回环地址</li>
+                  <li>面板和 <code>/metrics</code> 都建议启用只读账号或反代层认证</li>
+                  <li>先跑通一台节点，再逐步开启 2FA、审计日志和告警链路</li>
+                </ul>
                 <div class="stats-row">
                   <div class="stat-pill">
                     <strong>4-10 MB</strong>
@@ -748,20 +748,6 @@
                   </div>
                 </div>
               </div>
-            </div>
-            <div class="jump-grid">
-              <a class="jump-card" href="#deploy">
-                <strong>最快部署路径</strong>
-                <span>如果你只想先跑通一台节点，从这里开始。</span>
-              </a>
-              <a class="jump-card" href="#advanced">
-                <strong>生产环境配置</strong>
-                <span>HTTPS、WSS、Prometheus、交叉编译都在这一段。</span>
-              </a>
-              <a class="jump-card" href="#faq">
-                <strong>排障与回查</strong>
-                <span>节点不上线、token 过期、2FA 与审计日志等常见问题。</span>
-              </a>
             </div>
           </div>
         </div>
@@ -817,7 +803,7 @@
           </div>
           </div>
 
-          <div class="content-grid">
+          <div class="content-grid feature-split">
           <!-- 一键安装 -->
           <div class="card card-hover">
             <div class="card-header">
@@ -879,7 +865,7 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
           </h2>
           <p class="section-desc">当第一台节点已经跑起来后，再看这一节会更容易理解，也更适合生产环境使用。</p>
 
-          <div class="content-grid">
+          <div class="content-grid columns-2">
           <!-- 手工部署服务端 -->
           <div class="card card-hover">
             <div class="card-header">
