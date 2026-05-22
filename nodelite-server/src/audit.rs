@@ -4,6 +4,7 @@
 //! - 查询接口返回结构化事件,供排障或后续接前端/告警系统;
 //! - 所有写入都走 best-effort 路径:审计失败只记日志,不反向拖慢主流程。
 
+mod query;
 mod writer;
 
 use std::path::{Path, PathBuf};
@@ -12,9 +13,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use nodelite_proto::AuditConfig;
-use rusqlite::{Connection, params, params_from_iter};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
@@ -25,6 +26,7 @@ use tracing::{info, warn};
 
 use crate::fs_security::{create_private_dir_all, ensure_directory_mode};
 
+use self::query::query_events;
 use self::writer::{AuditWriterCommand, AuditWriterContext, run_audit_writer};
 
 #[cfg(unix)]
@@ -397,88 +399,6 @@ fn open_audit_connection(path: &Path, sqlite_busy_timeout_secs: u64) -> Result<C
     Ok(connection)
 }
 
-fn query_events(
-    connection: &Connection,
-    query: &AuditQuery,
-) -> Result<Vec<AuditEvent>, AuditLogError> {
-    let mut sql = String::from(
-        "SELECT id, timestamp, event_type, user, node_id, ip_address, user_agent, success, details
-         FROM audit_log WHERE 1=1",
-    );
-    let mut values = Vec::<rusqlite::types::Value>::new();
-
-    if let Some(start) = query.start {
-        sql.push_str(" AND timestamp >= ?");
-        values.push(rusqlite::types::Value::Integer(start.timestamp()));
-    }
-    if let Some(end) = query.end {
-        sql.push_str(" AND timestamp <= ?");
-        values.push(rusqlite::types::Value::Integer(end.timestamp()));
-    }
-    if let Some(event_type) = query.event_type {
-        sql.push_str(" AND event_type = ?");
-        values.push(rusqlite::types::Value::Text(
-            event_type.as_str().to_string(),
-        ));
-    }
-    if let Some(success) = query.success {
-        sql.push_str(" AND success = ?");
-        values.push(rusqlite::types::Value::Integer(success as i64));
-    }
-
-    sql.push_str(" ORDER BY timestamp DESC, id DESC LIMIT ?");
-    values.push(rusqlite::types::Value::Integer(query.limit as i64));
-
-    let mut statement = connection
-        .prepare(&sql)
-        .map_err(|error| AuditLogError::Query(anyhow!("failed to prepare audit query: {error}")))?;
-    let rows = statement
-        .query_map(params_from_iter(values), |row| {
-            let event_type = row.get::<_, String>(2)?;
-            let details = row.get::<_, String>(8)?;
-            let timestamp = row.get::<_, i64>(1)?;
-            let event_type = AuditEventType::parse(&event_type).ok_or_else(|| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    2,
-                    rusqlite::types::Type::Text,
-                    Box::new(std::io::Error::other(format!(
-                        "unknown audit event type {event_type}"
-                    ))),
-                )
-            })?;
-            let details = serde_json::from_str::<Value>(&details).map_err(|error| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    7,
-                    rusqlite::types::Type::Text,
-                    Box::new(error),
-                )
-            })?;
-            Ok(AuditEvent {
-                id: row.get(0)?,
-                timestamp: Utc.timestamp_opt(timestamp, 0).single().ok_or_else(|| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        1,
-                        rusqlite::types::Type::Integer,
-                        Box::new(std::io::Error::other(format!(
-                            "invalid audit timestamp {timestamp}"
-                        ))),
-                    )
-                })?,
-                event_type,
-                user: row.get(3)?,
-                node_id: row.get(4)?,
-                ip_address: row.get(5)?,
-                user_agent: row.get(6)?,
-                success: row.get::<_, i64>(7)? != 0,
-                details,
-            })
-        })
-        .map_err(|error| AuditLogError::Query(anyhow!("failed to execute audit query: {error}")))?;
-
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|error| AuditLogError::Query(anyhow!("failed to decode audit rows: {error}")))
-}
-
 fn prune_expired_records(connection: &Connection, retention_days: u64) -> Result<usize> {
     let cutoff = Utc::now() - ChronoDuration::days(retention_days as i64);
     connection
@@ -609,6 +529,80 @@ mod tests {
             assert_eq!(filtered[0].event_type, AuditEventType::LoginFailure);
             assert_eq!(filtered[0].user.as_deref(), Some("viewer"));
 
+            let _ = std::fs::remove_file(&db_path);
+            let _ = std::fs::remove_dir_all(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn audit_log_query_combines_optional_filters() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let temp_dir = unique_temp_dir("nodelite-audit-filter-combo");
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let db_path = temp_dir.join("audit.sqlite3");
+            let audit = AuditLog::new(sample_config(db_path.clone()), 5);
+            audit.initialize().await.expect("audit should initialize");
+            let base = Utc::now();
+
+            let stale_failure = NewAuditEvent {
+                timestamp: base - ChronoDuration::hours(2),
+                event_type: AuditEventType::LoginFailure,
+                user: Some("viewer".to_string()),
+                node_id: None,
+                ip_address: "198.51.100.30".to_string(),
+                user_agent: None,
+                success: false,
+                details: json!({"case":"stale"}),
+            };
+            let matching_failure = NewAuditEvent {
+                timestamp: base,
+                event_type: AuditEventType::LoginFailure,
+                user: Some("viewer".to_string()),
+                node_id: None,
+                ip_address: "198.51.100.31".to_string(),
+                user_agent: None,
+                success: false,
+                details: json!({"case":"matching"}),
+            };
+            let successful_totp = NewAuditEvent {
+                timestamp: base,
+                event_type: AuditEventType::TotpVerifySuccess,
+                user: Some("viewer".to_string()),
+                node_id: None,
+                ip_address: "198.51.100.32".to_string(),
+                user_agent: None,
+                success: true,
+                details: json!({"case":"success"}),
+            };
+            audit
+                .record(stale_failure)
+                .await
+                .expect("stale event should enqueue");
+            audit
+                .record(matching_failure)
+                .await
+                .expect("matching event should enqueue");
+            audit
+                .record(successful_totp)
+                .await
+                .expect("success event should enqueue");
+
+            let events = audit
+                .query(AuditQuery {
+                    start: Some(base - ChronoDuration::minutes(5)),
+                    end: Some(base + ChronoDuration::minutes(5)),
+                    event_type: Some(AuditEventType::LoginFailure),
+                    success: Some(false),
+                    limit: 10,
+                })
+                .await
+                .expect("combined audit query should succeed");
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].details["case"], "matching");
+
+            audit.shutdown().await;
             let _ = std::fs::remove_file(&db_path);
             let _ = std::fs::remove_dir_all(&temp_dir);
         });
