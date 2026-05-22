@@ -613,6 +613,21 @@
         font-size: 14px;
       }
       .alert svg { width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px; }
+      .alert-body {
+        min-width: 0;
+        flex: 1;
+      }
+      .alert-body strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 13px;
+      }
+      .alert-body p {
+        margin: 0;
+      }
+      .alert-body p + p {
+        margin-top: 6px;
+      }
       .alert.info {
         background: var(--accent-blue-soft);
         color: var(--accent-blue);
@@ -1006,7 +1021,11 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
 
             <div class="alert info">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-              一次性 install token 有效期 15 分钟。过期后重新执行 <code>install-agent</code> 即可。长期 node token 只在 bootstrap 响应体中下发，不出现在 URL 或命令参数中。
+              <div class="alert-body">
+                <strong>token 提示</strong>
+                <p>一次性 install token 有效期 15 分钟。过期后重新执行 <code>install-agent</code> 生成新的 token 即可。</p>
+                <p>长期 node token 只在 bootstrap 响应体中下发，不会出现在 URL 或命令参数中。</p>
+              </div>
             </div>
             </div>
           </details>
@@ -1025,7 +1044,7 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
             </summary>
             <div class="guide-body">
             <p class="body-copy">
-              生产环境推荐：<code>nodelite-server</code> 监听 <code>127.0.0.1:8080</code>，Nginx 对外暴露 <code>443</code> 端口。
+              生产环境推荐：<code>nodelite-server</code> 监听 <code>127.0.0.1:&lt;port&gt;</code>，Nginx 对外暴露 <code>443</code> 端口。
             </p>
 
             <div class="cmd-block">
@@ -1038,7 +1057,7 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
     ssl_certificate_key /path/to/privkey.pem;
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:&lt;port&gt;;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -1047,7 +1066,7 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
     }
 
     location /ws {
-        proxy_pass http://127.0.0.1:8080/ws;
+        proxy_pass http://127.0.0.1:&lt;port&gt;/ws;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -1060,7 +1079,7 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
     }
 
     location /install/ {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:&lt;port&gt;;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
