@@ -45,9 +45,8 @@
         margin: 0;
         color: var(--text-primary);
         background:
-          radial-gradient(circle at 18% 0%, rgba(59, 130, 246, 0.08), transparent 28%),
-          radial-gradient(circle at 82% 8%, rgba(168, 85, 247, 0.05), transparent 24%),
-          linear-gradient(180deg, #f8faff 0%, #f1f5fb 100%);
+          radial-gradient(circle at top center, rgba(59, 130, 246, 0.06), transparent 34%),
+          linear-gradient(180deg, #f8fbff 0%, #f3f6fb 100%);
         font-size: 15px;
         line-height: 1.6;
         -webkit-font-smoothing: antialiased;
@@ -174,8 +173,11 @@
       /* ---------- Main ---------- */
       .main {
         padding: 36px clamp(28px, 4vw, 56px) 72px;
-        max-width: 1480px;
+        max-width: none;
         width: 100%;
+      }
+      .doc-shell {
+        max-width: 960px;
         margin: 0 auto;
       }
       .page-header {
@@ -212,10 +214,7 @@
         margin-top: 26px;
       }
       .hero-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.95fr);
-        gap: 22px;
-        align-items: stretch;
+        display: block;
       }
       .hero-panel,
       .hero-mini {
@@ -238,14 +237,35 @@
         font-size: 15px;
       }
       .hero-mini {
-        display: flex;
-        flex-direction: column;
+        display: none;
       }
       .hero-actions {
         display: flex;
         flex-wrap: wrap;
         gap: 10px;
         margin-top: 16px;
+      }
+      .hero-steps {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 18px;
+      }
+      .hero-step {
+        padding: 14px 16px;
+        border-radius: 16px;
+        background: var(--bg-card-soft);
+        border: 1px solid var(--border-soft);
+      }
+      .hero-step strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 13px;
+        color: var(--accent-blue);
+      }
+      .hero-step span {
+        color: var(--text-secondary);
+        font-size: 14px;
       }
       .action-chip {
         display: inline-flex;
@@ -357,7 +377,7 @@
         border-radius: 16px;
         padding: 24px;
         margin-bottom: 16px;
-        box-shadow: var(--shadow-card);
+        box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
       }
       .card:last-child { margin-bottom: 0; }
       .card-hover:hover {
@@ -384,6 +404,94 @@
         grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
         align-items: start;
       }
+      .guide-stack {
+        display: grid;
+        gap: 16px;
+      }
+      .guide-section-title {
+        margin: 0 0 10px;
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--text-primary);
+      }
+      .guide-note {
+        color: var(--text-muted);
+        font-size: 14px;
+        margin: 10px 0 0;
+      }
+      .check-grid {
+        display: grid;
+        gap: 18px;
+      }
+      .check-block + .check-block {
+        padding-top: 18px;
+        border-top: 1px solid var(--border-soft);
+      }
+      .detail-list {
+        display: grid;
+        gap: 14px;
+      }
+      .guide-detail {
+        background: var(--bg-card);
+        border: 1px solid var(--border-soft);
+        border-radius: 18px;
+        box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+        padding: 0 22px;
+      }
+      .guide-summary {
+        list-style: none;
+        cursor: pointer;
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+        padding: 20px 0;
+      }
+      .guide-summary::-webkit-details-marker {
+        display: none;
+      }
+      .guide-summary-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+        padding: 10px;
+      }
+      .guide-summary-icon svg {
+        width: 20px;
+        height: 20px;
+        display: block;
+      }
+      .guide-summary-text {
+        min-width: 0;
+        flex: 1;
+      }
+      .guide-summary-text strong {
+        display: block;
+        font-size: 18px;
+        letter-spacing: -0.01em;
+      }
+      .guide-summary-text span {
+        display: block;
+        margin-top: 4px;
+        color: var(--text-muted);
+        font-size: 14px;
+      }
+      .guide-summary-caret {
+        width: 20px;
+        height: 20px;
+        color: var(--text-dim);
+        flex-shrink: 0;
+        margin-top: 4px;
+        transition: transform 160ms ease;
+      }
+      .guide-detail[open] .guide-summary-caret {
+        transform: rotate(180deg);
+      }
+      .guide-body {
+        padding: 0 0 22px;
+      }
       .card-icon {
         width: 40px;
         height: 40px;
@@ -399,11 +507,16 @@
         height: 20px;
         display: block;
       }
-      .card-icon.blue { background: var(--accent-blue-soft); color: var(--accent-blue); }
-      .card-icon.green { background: var(--accent-green-soft); color: var(--accent-green); }
-      .card-icon.purple { background: var(--accent-purple-soft); color: var(--accent-purple); }
-      .card-icon.yellow { background: var(--accent-yellow-soft); color: var(--accent-yellow); }
-      .card-icon.red { background: var(--accent-red-soft); color: var(--accent-red); }
+      .card-icon.blue,
+      .guide-summary-icon.blue { background: var(--accent-blue-soft); color: var(--accent-blue); }
+      .card-icon.green,
+      .guide-summary-icon.green { background: var(--accent-green-soft); color: var(--accent-green); }
+      .card-icon.purple,
+      .guide-summary-icon.purple { background: var(--accent-purple-soft); color: var(--accent-purple); }
+      .card-icon.yellow,
+      .guide-summary-icon.yellow { background: var(--accent-yellow-soft); color: var(--accent-yellow); }
+      .card-icon.red,
+      .guide-summary-icon.red { background: var(--accent-red-soft); color: var(--accent-red); }
       .card-title {
         font-size: 16px;
         font-weight: 600;
@@ -630,6 +743,7 @@
         .page-header h1 { font-size: 28px; }
         .page-header p { font-size: 15px; }
         .hero-grid,
+        .hero-steps,
         .stats-row,
         .content-grid.two-up,
         .content-grid.columns-2,
@@ -700,6 +814,7 @@
 
       <!-- Main -->
       <main class="main">
+        <div class="doc-shell">
         <div class="page-header">
           <div class="eyebrow">GitHub Pages / Quick Start / Public Docs</div>
           <h1>NodeLite</h1>
@@ -707,12 +822,21 @@
           <div class="hero">
             <div class="hero-grid">
               <div class="hero-panel">
-                <h2>公开部署参考</h2>
-                <p>这页适合第一次接触 NodeLite 的用户。先用默认推荐路径把第一台节点跑起来，再回头补反向代理、只读账号、Prometheus 和 2FA，会更顺手。</p>
-                <div class="tag-row">
-                  <span class="tag">Linux x86_64 / ARM64</span>
-                  <span class="tag">Server-Agent 架构</span>
-                  <span class="tag">可直接放到 GitHub Pages</span>
+                <h2>默认推荐路径</h2>
+                <p>第一次部署时，先只做能让第一台节点上线的那几步。等确认面板正常工作，再继续配 HTTPS、Prometheus、2FA 和反向代理，会清爽很多。</p>
+                <div class="hero-steps">
+                  <div class="hero-step">
+                    <strong>Step 1</strong>
+                    <span>安装服务端并完成初始化</span>
+                  </div>
+                  <div class="hero-step">
+                    <strong>Step 2</strong>
+                    <span>签发节点并在子机执行 Agent 安装命令</span>
+                  </div>
+                  <div class="hero-step">
+                    <strong>Step 3</strong>
+                    <span>确认节点在线后，再补生产环境配置</span>
+                  </div>
                 </div>
                 <div class="hero-actions">
                   <a class="action-chip" href="#deploy">先看最快部署路径</a>
@@ -721,31 +845,8 @@
                   <a class="action-chip" href="https://github.com/XiNian-dada/NodeLite/releases" target="_blank" rel="noreferrer">下载 Release</a>
                 </div>
                 <div class="hero-callout">
-                  <strong>推荐顺序</strong>
-                  <p>装服务端 → 签发节点 → 在子机执行 Agent 安装命令 → 确认节点在线 → 再加反向代理和监控告警。</p>
-                </div>
-              </div>
-              <div class="hero-mini">
-                <h2>推荐拓扑</h2>
-                <p>服务端监听 <code>127.0.0.1:8080</code>，对外通过 Nginx 或 Caddy 提供 <code>HTTPS</code> 与 <code>WSS</code>，Agent 统一接入 <code>/ws</code>，<code>/metrics</code> 可直接被 Prometheus 抓取。</p>
-                <ul class="mini-list hero-points">
-                  <li>对外只开放 <code>443</code>，服务端本身保持监听回环地址</li>
-                  <li>面板和 <code>/metrics</code> 都建议启用只读账号或反代层认证</li>
-                  <li>先跑通一台节点，再逐步开启 2FA、审计日志和告警链路</li>
-                </ul>
-                <div class="stats-row">
-                  <div class="stat-pill">
-                    <strong>4-10 MB</strong>
-                    <span>服务端内存</span>
-                  </div>
-                  <div class="stat-pill">
-                    <strong>800-1000 KB</strong>
-                    <span>Agent 内存</span>
-                  </div>
-                  <div class="stat-pill">
-                    <strong>18,677/s</strong>
-                    <span>200 节点吞吐</span>
-                  </div>
+                  <strong>一句话建议</strong>
+                  <p>把“一键安装 + Agent 上线”先跑通，就是这页最重要的部分；其余内容都可以按需慢慢展开。</p>
                 </div>
               </div>
             </div>
@@ -760,50 +861,7 @@
           </h2>
           <p class="section-desc">如果你只想尽快看到第一台节点在线，先按下面的最短路径走；生产环境的细化配置放在下一节。</p>
 
-          <div class="content-grid two-up">
-          <div class="card card-hover">
-            <div class="card-header">
-              <div class="card-icon blue">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="M12 3v18"/></svg>
-              </div>
-              <div>
-                <h3 class="card-title">部署前准备</h3>
-                <p class="card-sub">先把最基础的前提条件备齐</p>
-              </div>
-            </div>
-            <ul class="mini-list">
-              <li>一台可 SSH 的 Linux 主机，用来部署 <code>nodelite-server</code></li>
-              <li>一台或多台 Linux 子机，用来部署 <code>nodelite-agent</code></li>
-              <li>服务端建议预留一个域名，后面用于 HTTPS / WSS 和安装脚本分发</li>
-              <li>生产环境建议提前放行 <code>80/443</code>，并让服务端只监听回环地址</li>
-            </ul>
-            <p class="inline-note">如果只是本地验证，先用内网 IP 或临时域名也可以，跑通后再补反向代理。</p>
-          </div>
-
-          <div class="card card-hover">
-            <div class="card-header">
-              <div class="card-icon green">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-              </div>
-              <div>
-                <h3 class="card-title">最快跑通路径</h3>
-                <p class="card-sub">推荐给第一次接触 NodeLite 的用户</p>
-              </div>
-            </div>
-            <ol class="step-list">
-              <li>在服务端执行一键安装脚本，初始化账号密码和监听参数</li>
-              <li>在服务端执行 <code>install-agent</code> / <code>issue-node</code>，生成子机安装命令</li>
-              <li>把安装命令复制到目标子机执行，等待 agent 上线</li>
-              <li>确认面板能看到节点后，再补 Nginx/Caddy、Prometheus 和只读账号</li>
-            </ol>
-            <div class="alert good">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-              先跑通、再优化，是最省时间也最不容易卡住的路径。
-            </div>
-          </div>
-          </div>
-
-          <div class="content-grid feature-split">
+          <div class="guide-stack">
           <!-- 一键安装 -->
           <div class="card card-hover">
             <div class="card-header">
@@ -837,22 +895,28 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
             </div>
           </div>
 
-          <div class="card card-hover">
-            <div class="card-header">
-              <div class="card-icon purple">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg>
+          <div class="card">
+            <div class="check-grid">
+              <div class="check-block">
+                <h3 class="guide-section-title">开始前确认</h3>
+                <ul class="mini-list">
+                  <li>一台可 SSH 的 Linux 主机，用来部署 <code>nodelite-server</code></li>
+                  <li>一台或多台 Linux 子机，用来部署 <code>nodelite-agent</code></li>
+                  <li>服务端建议预留一个域名，后面用于 HTTPS / WSS 和安装脚本分发</li>
+                  <li>生产环境建议提前放行 <code>80/443</code>，并让服务端只监听回环地址</li>
+                </ul>
+                <p class="guide-note">如果只是本地验证，先用内网 IP 或临时域名也可以，跑通后再补反向代理。</p>
               </div>
-              <div>
-                <h3 class="card-title">部署完成的检查点</h3>
-                <p class="card-sub">确认下面几项，就算已经成功跑通</p>
+              <div class="check-block">
+                <h3 class="guide-section-title">跑通后检查</h3>
+                <ul class="mini-list">
+                  <li>服务端 <code>systemctl status nodelite-server</code> 为 <code>active (running)</code></li>
+                  <li>Agent 日志中出现成功连接到 <code>/ws</code> 的记录</li>
+                  <li>浏览器打开面板后能看到至少一台节点处于在线状态</li>
+                  <li><code>/metrics</code> 可以被抓取，或至少本地 <code>curl</code> 返回 Prometheus 文本</li>
+                </ul>
               </div>
             </div>
-            <ul class="mini-list">
-              <li>服务端 <code>systemctl status nodelite-server</code> 为 <code>active (running)</code></li>
-              <li>Agent 日志中出现成功连接到 <code>/ws</code> 的记录</li>
-              <li>浏览器打开面板后能看到至少一台节点处于在线状态</li>
-              <li><code>/metrics</code> 可以被抓取，或至少本地 <code>curl</code> 返回 Prometheus 文本</li>
-            </ul>
           </div>
           </div>
         </section>
@@ -865,18 +929,20 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
           </h2>
           <p class="section-desc">当第一台节点已经跑起来后，再看这一节会更容易理解，也更适合生产环境使用。</p>
 
-          <div class="content-grid columns-2">
+          <div class="detail-list">
           <!-- 手工部署服务端 -->
-          <div class="card card-hover">
-            <div class="card-header">
-              <div class="card-icon blue">
+          <details class="guide-detail">
+            <summary class="guide-summary">
+              <div class="guide-summary-icon blue">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
               </div>
-              <div>
-                <h3 class="card-title">手工部署</h3>
-                <p class="card-sub">对于需要精细控制配置的进阶用户</p>
+              <div class="guide-summary-text">
+                <strong>手工部署</strong>
+                <span>适合需要精细控制配置的进阶用户</span>
               </div>
-            </div>
+              <svg class="guide-summary-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </summary>
+            <div class="guide-body">
             <ol class="step-list">
               <li>从 <a href="https://github.com/XiNian-dada/NodeLite/releases" target="_blank" rel="noreferrer" class="text-link">GitHub Releases</a> 下载对应架构的 <code>nodelite-server</code> 二进制</li>
               <li>复制 <code>config/server.example.toml</code> 并修改关键配置（监听地址、域名、认证凭据等）</li>
@@ -895,19 +961,22 @@ sudo journalctl -u nodelite-server.service -f</pre>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               如果服务端起不来，第一时间检查 <code>sudo journalctl -u nodelite-server.service -n 100 --no-pager</code>
             </div>
-          </div>
+            </div>
+          </details>
 
           <!-- 节点签发与 Agent 安装 -->
-          <div class="card card-hover">
-            <div class="card-header">
-              <div class="card-icon purple">
+          <details class="guide-detail">
+            <summary class="guide-summary">
+              <div class="guide-summary-icon purple">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
               </div>
-              <div>
-                <h3 class="card-title">节点签发 &amp; Agent 部署</h3>
-                <p class="card-sub">在服务端生成含一次性 token 的安装命令，粘贴到目标子机执行</p>
+              <div class="guide-summary-text">
+                <strong>节点签发 &amp; Agent 部署</strong>
+                <span>在服务端生成含一次性 token 的安装命令，粘贴到目标子机执行</span>
               </div>
-            </div>
+              <svg class="guide-summary-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </summary>
+            <div class="guide-body">
 
             <div class="cmd-block">
               <span class="cmd-label">服务端签发节点</span>
@@ -939,19 +1008,22 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
               一次性 install token 有效期 15 分钟。过期后重新执行 <code>install-agent</code> 即可。长期 node token 只在 bootstrap 响应体中下发，不出现在 URL 或命令参数中。
             </div>
-          </div>
+            </div>
+          </details>
 
           <!-- 反向代理 -->
-          <div class="card card-hover">
-            <div class="card-header">
-              <div class="card-icon yellow">
+          <details class="guide-detail">
+            <summary class="guide-summary">
+              <div class="guide-summary-icon yellow">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
               </div>
-              <div>
-                <h3 class="card-title">反向代理配置</h3>
-                <p class="card-sub">Nginx 终结 HTTPS/WSS，服务端监听回环地址</p>
+              <div class="guide-summary-text">
+                <strong>反向代理配置</strong>
+                <span>Nginx 终结 HTTPS/WSS，服务端监听回环地址</span>
               </div>
-            </div>
+              <svg class="guide-summary-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </summary>
+            <div class="guide-body">
             <p class="body-copy">
               生产环境推荐：<code>nodelite-server</code> 监听 <code>127.0.0.1:8080</code>，Nginx 对外暴露 <code>443</code> 端口。
             </p>
@@ -1002,19 +1074,22 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
               Caddy 也可用 — 自动 TLS、无需手动配置证书。同机反代不需要额外配 <code>trusted_proxies</code>。
             </div>
-          </div>
+            </div>
+          </details>
 
           <!-- Prometheus -->
-          <div class="card card-hover">
-            <div class="card-header">
-              <div class="card-icon blue">
+          <details class="guide-detail">
+            <summary class="guide-summary">
+              <div class="guide-summary-icon blue">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
               </div>
-              <div>
-                <h3 class="card-title">Prometheus 集成</h3>
-                <p class="card-sub">NodeLite 提供 <code>/metrics</code> 端点，输出 Prometheus exposition 文本</p>
+              <div class="guide-summary-text">
+                <strong>Prometheus 集成</strong>
+                <span>NodeLite 提供 <code>/metrics</code> 端点，输出 Prometheus exposition 文本</span>
               </div>
-            </div>
+              <svg class="guide-summary-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </summary>
+            <div class="guide-body">
             <p class="body-copy">
               <code>/metrics</code> 与仪表盘共用只读认证，抓取端需带上同样的 Basic Auth 凭据。
             </p>
@@ -1035,19 +1110,22 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
       - targets:
           - monitor.example.com</pre>
             </div>
-          </div>
+            </div>
+          </details>
 
           <!-- 交叉编译 -->
-          <div class="card card-hover">
-            <div class="card-header">
-              <div class="card-icon green">
+          <details class="guide-detail">
+            <summary class="guide-summary">
+              <div class="guide-summary-icon green">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
               </div>
-              <div>
-                <h3 class="card-title">交叉编译</h3>
-                <p class="card-sub">在开发机上构建 Linux 静态二进制</p>
+              <div class="guide-summary-text">
+                <strong>交叉编译</strong>
+                <span>在开发机上构建 Linux 静态二进制</span>
               </div>
-            </div>
+              <svg class="guide-summary-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </summary>
+            <div class="guide-body">
             <p class="body-copy">
               仓库内置 musl 目标的 <code>lld</code> 链接配置，可直接交叉编译静态二进制。
             </p>
@@ -1061,7 +1139,8 @@ cargo build --release --target aarch64-unknown-linux-musl \
   -p nodelite-server \
   -p nodelite-agent</pre>
             </div>
-          </div>
+            </div>
+          </details>
           </div>
         </section>
 
@@ -1310,6 +1389,7 @@ curl -u viewer:secret 'https://monitor.example.com/api/audit-log?event_type=logi
             <a href="https://github.com/XiNian-dada/NodeLite/blob/main/LICENSE" target="_blank" rel="noreferrer">License</a>
           </p>
         </footer>
+        </div>
       </main>
     </div>
 
