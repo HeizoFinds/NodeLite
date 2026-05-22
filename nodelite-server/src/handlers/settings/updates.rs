@@ -21,6 +21,11 @@ use super::{
     server_update_writable_paths, settings_json_error,
 };
 
+#[cfg(not(test))]
+const LIVE_TOKEN_REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(test)]
+const LIVE_TOKEN_REFRESH_TIMEOUT: Duration = Duration::from_millis(50);
+
 /// 从网页端手动触发一次服务端升级。
 pub(crate) async fn start_server_update(
     State(state): State<AppState>,
@@ -130,7 +135,7 @@ pub(crate) async fn refresh_node_token(
         }
     };
 
-    let refresh_result = match timeout(Duration::from_secs(20), refresh_receiver).await {
+    let refresh_result = match timeout(LIVE_TOKEN_REFRESH_TIMEOUT, refresh_receiver).await {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => {
             return settings_json_error(
