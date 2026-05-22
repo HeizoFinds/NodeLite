@@ -5,5 +5,6 @@ mod concurrent_nodes;
 mod failure_recovery;
 mod metrics_collection;
 mod server_agent_handshake;
+mod settings_routes;
 mod shutdown_signal;
 mod token_lifecycle;
