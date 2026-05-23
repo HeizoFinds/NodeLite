@@ -276,6 +276,11 @@ impl SharedState {
         self.sqlite_wal_checkpoint.metrics().await
     }
 
+    pub(crate) async fn registry_disk_entries_total(&self) -> u64 {
+        let registry = self.registry.read().await;
+        registry.disk_entries_total()
+    }
+
     /// 返回缓存后的 `/metrics` 响应体。
     /// 缓存键由节点视图 revision、服务 readiness 摘要与最大存活时间共同决定。
     pub async fn metrics_text(&self, readiness: &ServerReadiness) -> Bytes {
@@ -741,6 +746,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn registry_disk_entries_total_counts_snapshot_disks() {
+        let shared = SharedState::new(Arc::new(sample_config()));
+        let first_session = shared
+            .register_node(sample_identity(), Some("198.51.100.10".to_string()))
+            .await;
+        let second_session = shared
+            .register_node(
+                NodeIdentity {
+                    node_id: "sg-01".to_string(),
+                    node_label: "Singapore 01".to_string(),
+                    ..sample_identity()
+                },
+                Some("198.51.100.11".to_string()),
+            )
+            .await;
+
+        let mut first = sample_snapshot(Utc::now());
+        first.disks.resize_with(2, sample_disk_usage);
+        let mut second = sample_snapshot(Utc::now());
+        second.disks.resize_with(3, sample_disk_usage);
+
+        assert!(
+            shared
+                .update_snapshot("hk-01", first_session, first)
+                .await
+                .is_some()
+        );
+        assert!(
+            shared
+                .update_snapshot("sg-01", second_session, second)
+                .await
+                .is_some()
+        );
+
+        assert_eq!(shared.registry_disk_entries_total().await, 5);
+    }
+
+    #[tokio::test]
     async fn metrics_cache_reuses_and_invalidates_cleanly() {
         let shared = SharedState::new(Arc::new(sample_config()));
         let readiness = crate::ServerReadiness::new(true);
@@ -877,6 +920,18 @@ mod tests {
                 rx_bytes_per_sec: Some(5.0),
                 tx_bytes_per_sec: Some(7.0),
             },
+        }
+    }
+
+    fn sample_disk_usage() -> nodelite_proto::DiskUsage {
+        nodelite_proto::DiskUsage {
+            device: "/dev/vda1".to_string(),
+            mount_point: "/".to_string(),
+            fs_type: "ext4".to_string(),
+            total_bytes: 1024,
+            available_bytes: 512,
+            used_bytes: 512,
+            used_percent: 50.0,
         }
     }
 }

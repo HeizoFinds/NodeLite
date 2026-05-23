@@ -272,7 +272,7 @@ pub(crate) fn render_runtime_metrics(metrics: RuntimeMetrics) -> String {
     );
     emitter.gauge(
         "nodelite_registry_disk_entries_total",
-        "Number of registered node entries observed from registry storage.",
+        "Number of disk entries currently held across node snapshots.",
         &[],
         metrics.registry_disk_entries_total,
     );
@@ -302,7 +302,7 @@ fn render_sqlite_wal_checkpoint_metrics(
     for (database, stats) in [("history", metrics.history), ("audit", metrics.audit)] {
         emitter.gauge(
             "nodelite_sqlite_wal_checkpoint_observed",
-            "Whether the latest SQLite WAL checkpoint observation succeeded.",
+            "Whether the latest passive SQLite WAL checkpoint probe succeeded.",
             &[("database", database)],
             if stats.observed { 1 } else { 0 },
         );
@@ -337,7 +337,7 @@ pub(crate) fn render_metrics_response_body_bytes(bytes: u64) -> String {
     let mut emitter = MetricEmitter::default();
     emitter.gauge(
         "nodelite_metrics_response_body_bytes",
-        "Size in bytes of the /metrics response body returned to the scraper.",
+        "Size in bytes of the uncompressed /metrics response body before HTTP compression.",
         &[],
         bytes,
     );
@@ -869,7 +869,7 @@ mod tests {
                 },
             },
             registry_nodes: 3,
-            registry_disk_entries_total: 3,
+            registry_disk_entries_total: 7,
             ws_messages: WsMessageMetrics {
                 metrics_total: 11,
                 agent_logs_total: 13,
@@ -908,7 +908,7 @@ mod tests {
         assert!(body.contains("# TYPE nodelite_registry_nodes gauge"));
         assert!(body.contains("nodelite_registry_nodes 3"));
         assert!(body.contains("# TYPE nodelite_registry_disk_entries_total gauge"));
-        assert!(body.contains("nodelite_registry_disk_entries_total 3"));
+        assert!(body.contains("nodelite_registry_disk_entries_total 7"));
         assert!(body.contains("# TYPE nodelite_ws_messages_total counter"));
         assert!(body.contains("nodelite_ws_messages_total{type=\"metrics\"} 11"));
         assert!(body.contains("nodelite_ws_messages_total{type=\"agent_logs\"} 13"));

@@ -131,6 +131,7 @@ pub(crate) async fn metrics(State(state): State<AppState>) -> Response {
         sqlite_artifact_sizes(config.audit.db_path.as_path()).await;
     let sqlite_wal_checkpoint = state.shared.sqlite_wal_checkpoint_metrics().await;
     let registry_entries = state.registry.count().await as u64;
+    let registry_disk_entries_total = state.shared.registry_disk_entries_total().await;
     let runtime_metrics = render_runtime_metrics(RuntimeMetrics {
         process_resident_memory_bytes: process_resident_memory_bytes(),
         history_db_bytes,
@@ -141,7 +142,7 @@ pub(crate) async fn metrics(State(state): State<AppState>) -> Response {
         audit_shm_bytes,
         sqlite_wal_checkpoint,
         registry_nodes: registry_entries,
-        registry_disk_entries_total: registry_entries,
+        registry_disk_entries_total,
         ws_messages: state.shared.ws_message_metrics(),
     });
     let dynamic_body = metrics_dynamic_body(

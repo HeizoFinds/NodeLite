@@ -184,6 +184,14 @@ impl Registry {
         build_overview(statuses)
     }
 
+    pub(super) fn disk_entries_total(&self) -> u64 {
+        self.nodes
+            .values()
+            .filter_map(|entry| entry.status.snapshot.as_ref())
+            .map(|snapshot| snapshot.disks.len() as u64)
+            .sum()
+    }
+
     pub(super) fn restore_statuses(&mut self, statuses: Vec<NodeStatus>) {
         self.nodes.clear();
         for mut status in statuses {
