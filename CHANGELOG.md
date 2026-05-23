@@ -1,239 +1,328 @@
-# Changelog
+# 更新日志
 
-All notable changes to this project will be documented in this file.
+本文件记录项目中的显著变更。
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
+本项目遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
-## [Unreleased]
+## [未发布]
 
-### Added
-- New features and improvements
+### 新增
+- Agent 新增 macOS 采集器支持，可在 macOS 上采集并上报系统指标。
 
-### Changed
-- Changes to existing functionality
+### 变更
+- 补充 macOS Agent 从源码构建与运行的文档。
+- 更新服务端 README 中的性能基线说明。
+- 优化 Web UI 架构图注释的中文表达、布局平衡和标签间距。
 
-### Deprecated
-- Soon-to-be removed features
+### 修复
+- 稳定历史 API 负载测试，降低测试波动。
 
-### Removed
-- Now removed features
+## [v2.2.0] - 2026-05-23
 
-### Fixed
-- Bug fixes
+### 新增
+- 新增 GitHub Pages 快速部署指南，并在文档入口中加入跳转链接。
+- CI 新增依赖漏洞扫描，提前发现高风险依赖变更。
+- 暴露历史和审计写入通道的丢弃指标，便于观察背压与采样行为。
 
-### Security
-- Vulnerability fixes
+### 变更
+- 拆分 WebSocket 会话流程、服务端共享状态和历史存储模块，降低核心路径复杂度。
+- 文档页调整为教程式流程，并同步优化首页品牌展示、性能说明与安全指引。
+- 复用 UTF-8 字节截断 helper 和 shell 参数引用 helper，减少重复实现。
+- 审计日志写入改为批处理，降低写入路径开销。
+- 历史写入节流移动到入队之后，采样与丢弃行为更加清晰。
+- 记录历史采样和丢弃策略，补充 Rust 版本要求说明。
+
+### 修复
+- 修复审计查询中的动态 SQL 风险，改用更安全的查询构造方式。
+- 修复审计写入器在查询前未完全刷新的问题。
+- 修复视图缓存锁内 await 导致的潜在阻塞。
+- 修复 Agent 日志缓冲区溢出裁剪需要多次扫描的问题。
+- 软化 token 过期后的 Agent 重连退避，避免过密重连。
+- 修复部署文档中的端口占位符转义和部署卡片图标尺寸问题。
+- 移除 `install-server` 脚本对 GNU `shuf` 的依赖，提升 POSIX 环境兼容性。
+
+### 安全
+- 限制 JSON 写入请求体大小，降低资源耗尽风险。
+- 加固公开认证路由，避免认证相关端点被错误暴露。
+- 升级 `rustls-webpki` 到 `0.103.13`。
+- 增加服务端配置序列化保护测试，防止敏感配置被直接输出。
+
+## [v2.1.6] - 2026-05-21
+
+### 新增
+- 新增持久化审计日志，用于记录关键认证与管理操作。
+
+### 变更
+- 加固认证与历史模块的错误边界，让调用方能更明确地区分错误来源。
+- Registry 增加类型化公共错误边界，减少 `anyhow` 向外层传播。
+- 拆分服务端 handlers 与 settings 模块，整理测试夹具和负载测试支撑代码。
+- 缩小 Registry 写入锁持有范围，并对 API 视图和 metrics 序列化结果做按 revision 缓存。
+
+### 修复
+- 使用结构化 TOML 编辑更新认证配置和 Agent token，避免字符串拼接造成配置损坏。
+- 修复 registry 相关 rustfmt 回归。
+
+### 安全
+- 加固只读认证和可信代理处理。
+- 扩展 WebSocket、CLI 和文件系统安全场景测试。
+
+## [v2.1.5] - 2026-05-20
+
+### 修复
+- Agent 日志摄取丢弃现在可观测，便于排查日志背压或溢出。
+
+### 安全
+- 移除携带凭证配置类型上的 `Serialize` 派生，避免敏感配置被直接序列化。
+- 统一启动流程与 settings 路由中的密码强度校验。
+
+## [v2.1.4] - 2026-05-19
+
+### 新增
+- Web UI 新增图表详情弹窗和平均值摘要，便于查看指标趋势。
+
+## [v2.1.3] - 2026-05-19
+
+### 修复
+- 修复 CSP 加固后仪表盘样式未正确加载的问题。
+
+### 变更
+- Release CI 拉取跨平台镜像时增加重试，降低临时网络波动导致的发布失败。
+
+## [v2.1.2] - 2026-05-19
+
+### 变更
+- 发布流程增加验证门禁，发布前强制经过检查。
+
+### 修复
+- WebSocket 认证成功通知前先挂载控制通道，避免早期控制消息丢失。
+- 修复 registry 测试中的格式化回归。
+
+## [v2.1.1] - 2026-05-19
+
+### 变更
+- 拆分配置解析、默认值、校验和测试模块，改善 proto 配置代码的维护性。
+- 拆分服务端启动逻辑、Registry 存储/token/render/test 逻辑、Agent runtime/session/config IO，以及负载测试场景。
+- WebSocket 会话流程抽出更小的 helper，handlers 与 ws 中移除过早微优化。
+- Registry token 轮换移除冗余参数，UI 缓存从 `Box::leak` 改为 `Arc<String>`。
+
+### 修复
+- 修复 WebSocket 计数器在 mutex poison 后的状态恢复逻辑，避免错误重置运行状态。
+- 加固 Prometheus exporter 输出，避免异常指标内容破坏 metrics 格式。
+
+### 安全
+- 仪表盘页面切换到 hash-based CSP，并进一步收紧 CSP 指令。
+- 加固 systemd 更新沙箱配置。
 
 ## [v2.1.0] - 2026-05-18
 
-### Added
-- Added Argon2id hash/verify helpers for node session tokens.
-- Added `token_hash` and `token_generation` fields to registered nodes while keeping legacy `token` reads for upgrade compatibility.
-- Added hash-at-rest coverage, including a migration test for legacy plaintext registry tokens.
-- Added graceful WebSocket shutdown handling so active sessions receive a Close frame during server shutdown.
+### 新增
+- 新增 Argon2id hash/verify helper，用于节点会话 token。
+- 注册节点新增 `token_hash` 与 `token_generation` 字段，同时保留 legacy `token` 读取以兼容升级。
+- 新增 token 静态哈希存储覆盖测试，包括 legacy 明文 registry token 的迁移测试。
+- 新增优雅 WebSocket 关闭处理，服务端关闭时会向活跃会话发送 Close frame。
 
-### Changed
-- Node authorization now verifies plaintext tokens only during handshake, then tracks `token_generation` for the WebSocket hot path.
-- Token refresh now rotates the token hash and increments generation, allowing existing sessions to detect registry-side token changes without repeated hash verification.
-- Install sessions now temporarily hold the plaintext node session token only for the bootstrap flow; generated agent config receives that plaintext explicitly.
-- History writes now use a bounded channel and batched writer task to avoid blocking the realtime WebSocket path.
-- Server tuning constants for timeouts, ping limits, SQLite busy timeout, sanitization limits, and warning intervals are now configurable.
+### 变更
+- 节点授权仅在握手阶段验证明文 token，WebSocket 热路径改用 `token_generation` 追踪状态。
+- Token refresh 会轮换 token hash 并递增 generation，使既有会话能检测 registry 侧 token 变化。
+- Install session 只在 bootstrap 流程中临时持有明文节点会话 token，并将明文显式写入生成的 Agent 配置。
+- 历史写入改为有界 channel 和批量 writer task，避免阻塞实时 WebSocket 路径。
+- 服务端的超时、ping 限制、SQLite busy timeout、输入清洗限制和 warning 间隔等调优常量改为可配置。
 
-### Fixed
-- Legacy registry files with plaintext node `token` values are automatically migrated on load: the token is hashed into `token_hash`, the plaintext field is cleared, `token_generation` is initialized, and the upgraded registry is persisted back to disk.
-- WebSocket handling now keeps token refresh generation in sync after manual and pre-expiry refreshes.
+### 修复
+- 载入 legacy registry 文件时会自动迁移明文节点 `token`：生成 `token_hash`、清空明文字段、初始化 `token_generation`，并把升级后的 registry 持久化回磁盘。
+- 手动刷新和过期前刷新 token 后，WebSocket 处理会保持 generation 同步。
 
-### Security
-- Node session tokens are no longer persisted in plaintext for new or migrated registry entries.
-- Readonly Basic Auth comparison uses constant-time matching.
-- Systemd service hardening now includes a tighter syscall filter.
+### 安全
+- 新增或迁移后的节点会话 token 不再以明文落盘。
+- 只读 Basic Auth 比较改为常量时间匹配。
+- Systemd service hardening 加入更严格的 syscall filter。
 
 ## [v2.0.7] - 2026-05-18
 
-### Added
-- Prometheus metrics endpoint (`/metrics`) for monitoring integration
-- Comprehensive test coverage for token refresh concurrency and expiry boundaries
-- Property-based testing for sanitize and registry modules
+### 新增
+- 新增 Prometheus metrics endpoint（`/metrics`），便于接入监控系统。
+- 新增 token refresh 并发与过期边界的测试覆盖。
+- 新增 sanitize 与 registry 模块的 property-based testing。
 
-### Fixed
-- Registry file lock cleanup panics are now properly handled
-- Server update temp script path hardened for security
+### 修复
+- 正确处理 Registry 文件锁清理时的 panic。
+- 加固服务端更新临时脚本路径。
 
 ## [v2.0.6] - 2026-05-17
 
-### Changed
-- Code formatting improvements with rustfmt
+### 变更
+- 使用 rustfmt 改进代码格式。
 
 ## [v2.0.5] - 2026-05-16
 
-### Added
-- API response caching for dashboard payloads
-- Dashboard brand logo asset optimization
+### 新增
+- 新增仪表盘 API 响应缓存。
+- 优化仪表盘品牌 logo 资源。
 
-### Fixed
-- Default node token lifetime shortened for security
-- Upstream refresh errors hidden from clients
-- Valid 2FA sessions preserved after mutex poison
-- POSIX shell compatibility for scripts
-- Dashboard first paint performance improved
+### 修复
+- 缩短默认节点 token 生命周期以提升安全性。
+- 对客户端隐藏上游 refresh 错误细节。
+- Mutex poison 后保留有效 2FA session。
+- 提升脚本的 POSIX shell 兼容性。
+- 改善仪表盘首屏渲染性能。
 
 ## [v2.0.4] - 2026-05-15
 
-### Added
-- CONTRIBUTING.md guide for contributors
-- CLAUDE.md for AI-assisted development
-- GitHub issue templates
-- Root MIT license file
+### 新增
+- 新增 `CONTRIBUTING.md` 贡献指南。
+- 新增 `CLAUDE.md` AI 辅助开发指南。
+- 新增 GitHub issue templates。
+- 新增根目录 MIT license 文件。
 
-### Changed
-- Module comments converted to rustdoc
-- Code formatting improvements
+### 变更
+- 模块注释转换为 rustdoc。
+- 改进代码格式。
 
-### Security
-- Password validation requirements strengthened
+### 安全
+- 加强密码校验要求。
 
 ## [2.0.3] - 2026-05-14
 
-### Added
-- Initial stable release features
+### 新增
+- 初始稳定版功能。
 
 ## [2.0.2] - 2026-05-13
 
-### Added
-- Bug fixes and improvements
+### 新增
+- Bug 修复与改进。
 
 ## [2.0.1] - 2026-05-12
 
-### Added
-- Initial open source release
-- Server-Agent architecture
-- WebSocket real-time communication
-- Token authentication with TOTP 2FA
-- SQLite historical data storage
-- Lightweight monitoring (server: 4-10MB, agent: 800KB)
+### 新增
+- 初始开源版本。
+- Server-Agent 架构。
+- WebSocket 实时通信。
+- Token 认证与 TOTP 2FA。
+- SQLite 历史数据存储。
+- 轻量级监控（服务端 4-10MB，Agent 800KB）。
 
-### Changed
-- Main entry point refactored to thin entrypoint
-- Settings module split for better organization
+### 变更
+- 主入口重构为轻量入口。
+- 拆分 settings 模块，改善代码组织。
 
 ## [2.0.0] - 2026-05-11
 
-### Added
-- Complete rewrite with modern architecture
-- New configuration format
-- Enhanced security features
+### 新增
+- 使用现代架构完成重写。
+- 新增配置格式。
+- 增强安全能力。
 
 ## [1.2.27] - 2026-05-10
 
-### Fixed
-- Various bug fixes and improvements
+### 修复
+- 多项 bug 修复与改进。
 
 ## [1.2.26] - 2026-05-09
 
-### Fixed
-- Stability improvements
+### 修复
+- 稳定性改进。
 
 ## [1.2.25] - 2026-05-08
 
-### Fixed
-- Performance optimizations
+### 修复
+- 性能优化。
 
 ## [1.2.24] - 2026-05-07
 
-### Fixed
-- Security enhancements
+### 修复
+- 安全增强。
 
 ## [1.2.23] - 2026-05-06
 
-### Fixed
-- UI improvements
+### 修复
+- UI 改进。
 
 ## [1.2.22] - 2026-05-05
 
-### Fixed
-- Configuration handling improvements
+### 修复
+- 配置处理改进。
 
 ## [1.2.21] - 2026-05-04
 
-### Fixed
-- WebSocket connection stability
+### 修复
+- WebSocket 连接稳定性改进。
 
 ## [1.2.20] - 2026-05-03
 
-### Fixed
-- Authentication flow improvements
+### 修复
+- 认证流程改进。
 
 ## [1.2.19] - 2026-05-02
 
-### Fixed
-- Data collection reliability
+### 修复
+- 数据采集可靠性改进。
 
 ## [1.2.18] - 2026-05-01
 
-### Fixed
-- Memory usage optimizations
+### 修复
+- 内存使用优化。
 
 ## [1.2.17] - 2026-04-30
 
-### Fixed
-- Logging improvements
+### 修复
+- 日志改进。
 
 ## [1.2.16] - 2026-04-29
 
-### Fixed
-- Initial stable release
+### 修复
+- 初始稳定版本。
 
 ## [1.1.0] - 2026-04-28
 
-### Added
-- Multi-node support
-- Historical data storage
+### 新增
+- 多节点支持。
+- 历史数据存储。
 
 ## [1.0.8] - 2026-04-27
 
-### Fixed
-- Bug fixes and stability improvements
+### 修复
+- Bug 修复与稳定性改进。
 
 ## [1.0.7] - 2026-04-26
 
-### Fixed
-- Performance optimizations
+### 修复
+- 性能优化。
 
 ## [1.0.6] - 2026-04-25
 
-### Fixed
-- Security enhancements
+### 修复
+- 安全增强。
 
 ## [1.0.5] - 2026-04-24
 
-### Fixed
-- UI improvements
+### 修复
+- UI 改进。
 
 ## [1.0.4] - 2026-04-23
 
-### Fixed
-- Configuration handling
+### 修复
+- 配置处理改进。
 
 ## [1.0.3] - 2026-04-22
 
-### Fixed
-- WebSocket stability
+### 修复
+- WebSocket 稳定性改进。
 
 ## [1.0.2] - 2026-04-21
 
-### Fixed
-- Authentication improvements
+### 修复
+- 认证改进。
 
 ## [1.0.1] - 2026-04-20
 
-### Fixed
-- Initial bug fixes
+### 修复
+- 初始 bug 修复。
 
 ## [1.0.0] - 2026-04-19
 
-### Added
-- Initial release
-- Basic monitoring functionality
-- Agent-server architecture
-- Real-time data visualization
+### 新增
+- 初始发布。
+- 基础监控功能。
+- Agent-server 架构。
+- 实时数据可视化。
