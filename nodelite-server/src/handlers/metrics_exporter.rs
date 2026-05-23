@@ -23,6 +23,7 @@ pub(crate) struct WriterMetrics {
     pub(crate) history_dropped_writes: u64,
     pub(crate) audit_dropped_writes: u64,
     pub(crate) audit_write_failures: u64,
+    pub(crate) session_control_queue_full_total: u64,
 }
 
 pub(crate) fn render_writer_metrics(metrics: WriterMetrics) -> String {
@@ -44,6 +45,12 @@ pub(crate) fn render_writer_metrics(metrics: WriterMetrics) -> String {
         "Number of audit writer failures while enqueueing or persisting events.",
         &[],
         metrics.audit_write_failures,
+    );
+    emitter.counter(
+        "nodelite_session_control_queue_full_total",
+        "Number of session control commands rejected because a bounded queue was full.",
+        &[],
+        metrics.session_control_queue_full_total,
     );
     emitter.finish()
 }
@@ -438,6 +445,7 @@ mod tests {
             history_dropped_writes: 3,
             audit_dropped_writes: 5,
             audit_write_failures: 7,
+            session_control_queue_full_total: 11,
         });
 
         assert!(body.contains("# TYPE nodelite_history_dropped_writes_total counter"));
@@ -446,6 +454,8 @@ mod tests {
         assert!(body.contains("nodelite_audit_dropped_writes_total 5"));
         assert!(body.contains("# TYPE nodelite_audit_write_failures_total counter"));
         assert!(body.contains("nodelite_audit_write_failures_total 7"));
+        assert!(body.contains("# TYPE nodelite_session_control_queue_full_total counter"));
+        assert!(body.contains("nodelite_session_control_queue_full_total 11"));
     }
 
     fn sample_statuses() -> Vec<NodeStatus> {

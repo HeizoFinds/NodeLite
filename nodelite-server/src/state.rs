@@ -20,10 +20,12 @@ use std::time::Duration;
 use axum::body::Bytes;
 use chrono::Utc;
 use nodelite_proto::{NodeIdentity, NodeSnapshot, NodeStatus, OverviewData, ServerConfig};
-use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
+use tokio::sync::{Mutex, RwLock, oneshot};
 
 use self::registry::Registry;
-pub(crate) use self::session_control::{SessionCommand, SessionCommandError, SessionRefreshReply};
+pub(crate) use self::session_control::{
+    SessionCommand, SessionCommandError, SessionControlHandle, SessionRefreshReply,
+};
 use self::view_cache::{ApiBodyKind, ReadinessSnapshot, ViewCache};
 use crate::ServerReadiness;
 use crate::handlers::metrics_exporter::render_prometheus_metrics;
@@ -38,6 +40,7 @@ pub struct SharedState {
     view_cache: Arc<Mutex<ViewCache>>,
     api_cache_build_lock: Arc<Mutex<()>>,
     metrics_cache_build_lock: Arc<Mutex<()>>,
+    session_control_queue_full_total: Arc<AtomicU64>,
     #[cfg(test)]
     api_cache_builds: Arc<AtomicU64>,
     #[cfg(test)]
@@ -54,6 +57,7 @@ impl SharedState {
             view_cache: Arc::new(Mutex::new(ViewCache::default())),
             api_cache_build_lock: Arc::new(Mutex::new(())),
             metrics_cache_build_lock: Arc::new(Mutex::new(())),
+            session_control_queue_full_total: Arc::new(AtomicU64::new(0)),
             #[cfg(test)]
             api_cache_builds: Arc::new(AtomicU64::new(0)),
             #[cfg(test)]
@@ -114,10 +118,10 @@ impl SharedState {
         &self,
         node_id: &str,
         session_id: u64,
-        control_tx: mpsc::UnboundedSender<SessionCommand>,
+        control: SessionControlHandle,
     ) -> bool {
         let mut registry = self.registry.write().await;
-        registry.attach_session_control(node_id, session_id, control_tx)
+        registry.attach_session_control(node_id, session_id, control)
     }
 
     /// 把超时(超过 `stale_after_secs`)的节点统一标记为离线,返回受影响节点数。
@@ -163,12 +167,20 @@ impl SharedState {
         };
 
         let (response_tx, response_rx) = oneshot::channel();
-        control_tx
-            .send(SessionCommand::RefreshToken {
-                response: response_tx,
-            })
-            .map_err(|_| SessionCommandError::SessionClosed)?;
+        if let Err(error) = control_tx.try_enqueue_refresh(response_tx) {
+            if matches!(error, SessionCommandError::QueueFull) {
+                self.session_control_queue_full_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            return Err(error);
+        }
         Ok(response_rx)
+    }
+
+    /// 控制命令队列满时拒绝入队的总次数,用于暴露到 `/metrics`。
+    pub fn session_control_queue_full_total(&self) -> u64 {
+        self.session_control_queue_full_total
+            .load(Ordering::Relaxed)
     }
 
     /// 返回缓存后的 `/api/overview` 响应体。只要对外节点视图没有变化,
@@ -300,9 +312,8 @@ mod tests {
         LoadAverage, MemoryUsage, NodeSnapshot, ReadonlyAuthConfig, ServerConfig, WsConfig,
     };
     use nodelite_proto::{NetworkCounters, percentage};
-    use tokio::sync::mpsc;
 
-    use super::{Registry, SessionCommand, SharedState};
+    use super::{Registry, SessionControlHandle, SharedState};
     use nodelite_proto::NodeIdentity;
 
     #[test]
@@ -442,8 +453,8 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 5, 7, 0, 0, 0).unwrap();
         registry.register_node(7, sample_identity(), Some("198.51.100.10".to_string()), now);
 
-        let (control_tx, _control_rx) = mpsc::unbounded_channel::<SessionCommand>();
-        assert!(registry.attach_session_control("hk-01", 7, control_tx));
+        let (control, _control_rx) = SessionControlHandle::channel();
+        assert!(registry.attach_session_control("hk-01", 7, control));
         assert!(registry.session_control("hk-01").is_some());
 
         registry.register_node(
@@ -464,8 +475,8 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 5, 7, 0, 0, 0).unwrap();
         registry.register_node(9, sample_identity(), Some("198.51.100.10".to_string()), now);
 
-        let (control_tx, _control_rx) = mpsc::unbounded_channel::<SessionCommand>();
-        assert!(registry.attach_session_control("hk-01", 9, control_tx));
+        let (control, _control_rx) = SessionControlHandle::channel();
+        assert!(registry.attach_session_control("hk-01", 9, control));
         registry.mark_disconnected("hk-01", 9);
 
         assert!(registry.session_control("hk-01").is_none());
