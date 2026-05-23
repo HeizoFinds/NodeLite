@@ -2075,6 +2075,7 @@
           }));
       }
       function addBucketValue(bucket, value) {
+        if (value == null) return;
         const numeric = Number(value);
         if (!Number.isFinite(numeric)) return;
         bucket.sum += numeric;

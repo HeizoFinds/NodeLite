@@ -26,7 +26,11 @@ async fn metrics_flow_reaches_status_and_history_endpoints() -> Result<()> {
         .await?;
     assert!(!history.is_empty());
     assert!(history.iter().all(|point| point.node_id == node.node_id));
-    assert!(history[0].cpu_usage_percent >= 0.0);
+    assert!(
+        history[0]
+            .cpu_usage_percent
+            .is_some_and(|value| value >= 0.0)
+    );
 
     agent.disconnect().await?;
     server.shutdown().await

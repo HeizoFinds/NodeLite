@@ -645,7 +645,7 @@ mod tests {
     fn sample_snapshot(now: chrono::DateTime<Utc>) -> NodeSnapshot {
         NodeSnapshot {
             collected_at: now,
-            cpu_usage_percent: percentage(1, 2),
+            cpu_usage_percent: Some(percentage(1, 2)),
             load: LoadAverage {
                 one: 0.1,
                 five: 0.2,

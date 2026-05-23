@@ -563,7 +563,7 @@ pub fn fake_snapshot(uptime_secs: u64) -> NodeSnapshot {
 pub(crate) fn fake_snapshot_at(uptime_secs: u64, collected_at: DateTime<Utc>) -> NodeSnapshot {
     NodeSnapshot {
         collected_at,
-        cpu_usage_percent: 12.5 + (uptime_secs % 7) as f64,
+        cpu_usage_percent: Some(12.5 + (uptime_secs % 7) as f64),
         load: LoadAverage {
             one: 0.3,
             five: 0.4,

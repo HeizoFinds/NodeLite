@@ -30,7 +30,7 @@ pub(super) fn initialize_database(
         CREATE TABLE IF NOT EXISTS history_points (
             node_id TEXT NOT NULL,
             recorded_at INTEGER NOT NULL,
-            cpu_usage_percent REAL NOT NULL,
+            cpu_usage_percent REAL,
             memory_used_percent REAL NOT NULL,
             rx_bytes_per_sec REAL,
             tx_bytes_per_sec REAL,
@@ -52,9 +52,79 @@ pub(super) fn initialize_database(
             );
         "#,
     )?;
+    migrate_nullable_cpu_usage(&connection)?;
     harden_database_artifacts(db_path)?;
 
     Ok(connection)
+}
+
+fn migrate_nullable_cpu_usage(connection: &Connection) -> Result<()> {
+    let cpu_not_null = connection
+        .prepare("PRAGMA table_info(history_points)")?
+        .query_map([], |row| {
+            let column_name: String = row.get(1)?;
+            let not_null: i64 = row.get(3)?;
+            Ok((column_name, not_null))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .any(|(column_name, not_null)| column_name == "cpu_usage_percent" && not_null != 0);
+    if !cpu_not_null {
+        return Ok(());
+    }
+
+    connection.execute_batch(
+        r#"
+        DROP INDEX IF EXISTS idx_history_points_node_time;
+        DROP INDEX IF EXISTS idx_history_points_covering_metrics;
+        ALTER TABLE history_points RENAME TO history_points_legacy_not_null_cpu;
+        CREATE TABLE history_points (
+            node_id TEXT NOT NULL,
+            recorded_at INTEGER NOT NULL,
+            cpu_usage_percent REAL,
+            memory_used_percent REAL NOT NULL,
+            rx_bytes_per_sec REAL,
+            tx_bytes_per_sec REAL,
+            latency_ms INTEGER,
+            disk_used_percent REAL
+        );
+        INSERT INTO history_points (
+            node_id,
+            recorded_at,
+            cpu_usage_percent,
+            memory_used_percent,
+            rx_bytes_per_sec,
+            tx_bytes_per_sec,
+            latency_ms,
+            disk_used_percent
+        )
+        SELECT
+            node_id,
+            recorded_at,
+            cpu_usage_percent,
+            memory_used_percent,
+            rx_bytes_per_sec,
+            tx_bytes_per_sec,
+            latency_ms,
+            disk_used_percent
+        FROM history_points_legacy_not_null_cpu;
+        DROP TABLE history_points_legacy_not_null_cpu;
+        CREATE INDEX IF NOT EXISTS idx_history_points_node_time
+            ON history_points (node_id, recorded_at);
+        CREATE INDEX IF NOT EXISTS idx_history_points_covering_metrics
+            ON history_points (
+                node_id,
+                recorded_at,
+                cpu_usage_percent,
+                memory_used_percent,
+                rx_bytes_per_sec,
+                tx_bytes_per_sec,
+                latency_ms,
+                disk_used_percent
+            );
+        "#,
+    )?;
+    Ok(())
 }
 
 /// 打开 SQLite 连接,可选启用 WAL 模式以提升并发写入吞吐。

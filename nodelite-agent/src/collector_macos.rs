@@ -96,14 +96,12 @@ impl HostCollector {
     /// 采集一张完整快照。
     ///
     /// 首次调用时由于没有"上一次"的数据,`cpu_usage_percent` 与网络速率
-    /// 都会返回 0 / `None`,这是符合预期的初始状态。
+    /// 都会返回 `None`,这是符合预期的初始状态。
     pub fn collect_snapshot(&mut self) -> Result<NodeSnapshot> {
         let cpu_sample = collect_cpu_sample()?;
-        let cpu_usage_percent = if let Some(previous) = self.previous_cpu {
-            compute_cpu_usage(previous, cpu_sample)
-        } else {
-            0.0
-        };
+        let cpu_usage_percent = self
+            .previous_cpu
+            .map(|previous| compute_cpu_usage(previous, cpu_sample));
         self.previous_cpu = Some(cpu_sample);
 
         let network_totals = match collect_network_totals() {

@@ -1479,7 +1479,9 @@
         if (!Array.isArray(history) || history.length === 0) return [];
         const buckets = new Map();
         for (const point of history) {
-          const value = Number(point[field]);
+          const rawValue = point[field];
+          if (rawValue == null) continue;
+          const value = Number(rawValue);
           if (!Number.isFinite(value)) continue;
           const bucket = Math.floor(point._ts / bucketMs) * bucketMs;
           const item = buckets.get(bucket) || { sum: 0, count: 0 };
@@ -1543,7 +1545,9 @@
         const history = sparkHistory.get(node.identity.node_id);
         const points = aggregateSeries(history, "cpu_usage_percent");
         if (points.length > 0) return points;
-        const current = Number(node.snapshot?.cpu_usage_percent);
+        const rawCurrent = node.snapshot?.cpu_usage_percent;
+        if (rawCurrent == null) return [];
+        const current = Number(rawCurrent);
         return Number.isFinite(current) ? [current] : [];
       }
       function sparklineSvg(points, color) {

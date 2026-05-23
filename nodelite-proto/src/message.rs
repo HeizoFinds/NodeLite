@@ -9,7 +9,12 @@ use crate::model::{NodeIdentity, NodeSnapshot};
 ///
 /// 只要 `WireMessage` 的兼容性承诺被打破(删除字段、修改语义、移除变体),
 /// 就必须递增该版本,让 server 在握手阶段拒绝不兼容 agent。
-pub const WIRE_PROTOCOL_VERSION: u16 = 1;
+pub const WIRE_PROTOCOL_VERSION: u16 = 2;
+
+/// Server 当前仍接受的最早线协议版本。
+///
+/// v1 Agent 会继续把 CPU 首帧表示为 `0`,v2 Agent 则可用 `null` 表示差分尚未就绪。
+pub const MIN_SUPPORTED_WIRE_PROTOCOL_VERSION: u16 = 1;
 
 fn current_protocol_version() -> u16 {
     WIRE_PROTOCOL_VERSION
@@ -147,6 +152,49 @@ mod tests {
         assert_eq!(hello.protocol_version, WIRE_PROTOCOL_VERSION);
     }
 
+    #[test]
+    fn metrics_cpu_usage_accepts_legacy_number_and_null() {
+        let base_payload = r#"{
+            "type":"metrics",
+            "snapshot":{
+                "collected_at":"2026-05-07T01:00:00Z",
+                "load":{"one":0.3,"five":0.4,"fifteen":0.5},
+                "memory":{
+                    "total_bytes":1024,
+                    "used_bytes":512,
+                    "available_bytes":512,
+                    "swap_total_bytes":0,
+                    "swap_used_bytes":0
+                },
+                "uptime_secs":60,
+                "disks":[],
+                "network":{
+                    "total_rx_bytes":100,
+                    "total_tx_bytes":200,
+                    "rx_bytes_per_sec":null,
+                    "tx_bytes_per_sec":null
+                }
+            }
+        }"#;
+        let legacy_payload =
+            base_payload.replace(r#""load""#, r#""cpu_usage_percent":42.5,"load""#);
+        let null_payload = base_payload.replace(r#""load""#, r#""cpu_usage_percent":null,"load""#);
+
+        let legacy: WireMessage =
+            serde_json::from_str(&legacy_payload).expect("legacy numeric cpu should parse");
+        let null: WireMessage =
+            serde_json::from_str(&null_payload).expect("nullable cpu should parse");
+
+        let WireMessage::Metrics(legacy) = legacy else {
+            panic!("legacy payload should decode as metrics");
+        };
+        let WireMessage::Metrics(null) = null else {
+            panic!("null payload should decode as metrics");
+        };
+        assert_eq!(legacy.snapshot.cpu_usage_percent, Some(42.5));
+        assert_eq!(null.snapshot.cpu_usage_percent, None);
+    }
+
     /// 验证所有 WireMessage 子类型都能完整序列化和反序列化。
     #[test]
     fn round_trips_wire_messages() {
@@ -170,7 +218,7 @@ mod tests {
         let snapshot = WireMessage::Metrics(super::MetricsMessage {
             snapshot: NodeSnapshot {
                 collected_at: Utc.with_ymd_and_hms(2026, 5, 7, 1, 0, 0).unwrap(),
-                cpu_usage_percent: 42.5,
+                cpu_usage_percent: Some(42.5),
                 load: LoadAverage {
                     one: 0.3,
                     five: 0.4,

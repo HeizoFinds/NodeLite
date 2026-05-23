@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use axum::extract::ws::WebSocket;
-use nodelite_proto::{HelloMessage, ServerNoticeMessage, WIRE_PROTOCOL_VERSION, WireMessage};
+use nodelite_proto::{
+    HelloMessage, MIN_SUPPORTED_WIRE_PROTOCOL_VERSION, ServerNoticeMessage, WIRE_PROTOCOL_VERSION,
+    WireMessage,
+};
 use serde_json::json;
 use tracing::{info, warn};
 
@@ -95,19 +98,21 @@ async fn authorize_hello(
     hello: &HelloMessage,
     audit_user_agent: Option<String>,
 ) -> Result<AuthorizedNode, super::ProtocolError> {
-    if hello.protocol_version != WIRE_PROTOCOL_VERSION {
+    if hello.protocol_version < MIN_SUPPORTED_WIRE_PROTOCOL_VERSION
+        || hello.protocol_version > WIRE_PROTOCOL_VERSION
+    {
         state.ws_admission.record_auth_failure(client_ip);
         let notice = WireMessage::ServerNotice(ServerNoticeMessage {
             level: nodelite_proto::NoticeLevel::Error,
             message: format!(
-                "unsupported protocol version {}; server expects {}",
-                hello.protocol_version, WIRE_PROTOCOL_VERSION
+                "unsupported protocol version {}; server supports {}..={}",
+                hello.protocol_version, MIN_SUPPORTED_WIRE_PROTOCOL_VERSION, WIRE_PROTOCOL_VERSION
             ),
         });
         let _ = send_wire_message(socket, &notice).await;
         return Err(super::ProtocolError::Client(format!(
-            "unsupported protocol version {}; expected {}",
-            hello.protocol_version, WIRE_PROTOCOL_VERSION
+            "unsupported protocol version {}; supported range {}..={}",
+            hello.protocol_version, MIN_SUPPORTED_WIRE_PROTOCOL_VERSION, WIRE_PROTOCOL_VERSION
         )));
     }
 

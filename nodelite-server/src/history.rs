@@ -414,7 +414,7 @@ mod tests {
             remote_ip: Some("198.51.100.24".to_string()),
             snapshot: Some(NodeSnapshot {
                 collected_at: now + Duration::hours(24),
-                cpu_usage_percent: 42.0,
+                cpu_usage_percent: Some(42.0),
                 load: LoadAverage {
                     one: 0.1,
                     five: 0.2,
@@ -467,7 +467,7 @@ mod tests {
                 &HistoryPoint {
                     node_id: "hk-01".to_string(),
                     recorded_at: Utc::now(),
-                    cpu_usage_percent: 1.0,
+                    cpu_usage_percent: Some(1.0),
                     memory_used_percent: 2.0,
                     rx_bytes_per_sec: Some(3.0),
                     tx_bytes_per_sec: Some(4.0),
@@ -567,7 +567,7 @@ mod tests {
                 &HistoryPoint {
                     node_id: "hk-01".to_string(),
                     recorded_at: start + Duration::seconds(index * 120),
-                    cpu_usage_percent: index as f64,
+                    cpu_usage_percent: Some(index as f64),
                     memory_used_percent: 50.0,
                     rx_bytes_per_sec: Some(index as f64),
                     tx_bytes_per_sec: Some(index as f64 / 2.0),
@@ -589,6 +589,93 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].recorded_at <= pair[1].recorded_at)
         );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn history_accepts_unknown_cpu_usage_after_schema_migration() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("nodelite-history-null-cpu-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+        let db_path = temp_dir.join("history.sqlite3");
+        {
+            let connection =
+                rusqlite::Connection::open(&db_path).expect("legacy database should open");
+            connection
+                .execute_batch(
+                    r#"
+                    CREATE TABLE history_points (
+                        node_id TEXT NOT NULL,
+                        recorded_at INTEGER NOT NULL,
+                        cpu_usage_percent REAL NOT NULL,
+                        memory_used_percent REAL NOT NULL,
+                        rx_bytes_per_sec REAL,
+                        tx_bytes_per_sec REAL,
+                        latency_ms INTEGER,
+                        disk_used_percent REAL
+                    );
+                    CREATE INDEX idx_history_points_node_time
+                        ON history_points (node_id, recorded_at);
+                    CREATE INDEX idx_history_points_covering_metrics
+                        ON history_points (
+                            node_id,
+                            recorded_at,
+                            cpu_usage_percent,
+                            memory_used_percent,
+                            rx_bytes_per_sec,
+                            tx_bytes_per_sec,
+                            latency_ms,
+                            disk_used_percent
+                        );
+                    "#,
+                )
+                .expect("legacy schema should be created");
+        }
+
+        let mut connection = initialize_database(&db_path, 5).expect("database should migrate");
+        let cpu_not_null: i64 = connection
+            .query_row(
+                "SELECT [notnull] FROM pragma_table_info('history_points') WHERE name = 'cpu_usage_percent'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("cpu column metadata should be readable");
+        assert_eq!(cpu_not_null, 0);
+
+        let recorded_at = Utc::now();
+        write_history_point(
+            &db_path,
+            &mut connection,
+            &HistoryPoint {
+                node_id: "hk-01".to_string(),
+                recorded_at,
+                cpu_usage_percent: None,
+                memory_used_percent: 50.0,
+                rx_bytes_per_sec: None,
+                tx_bytes_per_sec: None,
+                latency_ms: None,
+                disk_used_percent: None,
+            },
+            None,
+            &AtomicBool::new(false),
+        )
+        .expect("unknown cpu history point should persist");
+
+        let points = query_history_between(
+            &connection,
+            "hk-01",
+            recorded_at - Duration::seconds(1),
+            recorded_at + Duration::seconds(1),
+            60,
+        )
+        .expect("history query should succeed");
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].cpu_usage_percent, None);
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&temp_dir);
@@ -656,7 +743,7 @@ mod tests {
             remote_ip: Some("198.51.100.24".to_string()),
             snapshot: Some(NodeSnapshot {
                 collected_at: recorded_at,
-                cpu_usage_percent: 42.0,
+                cpu_usage_percent: Some(42.0),
                 load: LoadAverage {
                     one: 0.1,
                     five: 0.2,
@@ -742,7 +829,7 @@ mod tests {
             tx.try_send(HistoryPoint {
                 node_id: format!("queued-{index}"),
                 recorded_at: Utc::now(),
-                cpu_usage_percent: 1.0,
+                cpu_usage_percent: Some(1.0),
                 memory_used_percent: 2.0,
                 rx_bytes_per_sec: Some(3.0),
                 tx_bytes_per_sec: Some(4.0),

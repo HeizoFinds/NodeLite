@@ -927,7 +927,7 @@ fn sanitize_snapshot_clamps_invalid_metrics() {
     };
     let snapshot = NodeSnapshot {
         collected_at: Utc::now(),
-        cpu_usage_percent: f64::INFINITY,
+        cpu_usage_percent: Some(f64::INFINITY),
         load: nodelite_proto::LoadAverage {
             one: -1.0,
             five: f64::NAN,
@@ -979,7 +979,7 @@ fn sanitize_snapshot_clamps_invalid_metrics() {
     };
 
     let (sanitized, report) = sanitize_snapshot(&config, snapshot);
-    assert_eq!(sanitized.cpu_usage_percent, 100.0);
+    assert_eq!(sanitized.cpu_usage_percent, Some(100.0));
     assert_eq!(sanitized.load.five, 0.0);
     assert_eq!(sanitized.load.fifteen, MAX_SANITIZED_LOAD);
     assert_eq!(sanitized.memory.used_bytes, 100);
@@ -1003,6 +1003,45 @@ fn sanitize_snapshot_clamps_invalid_metrics() {
     assert_eq!(report.dropped_disks, 1);
     assert_eq!(report.sanitized_rates, 2);
     assert!(report.modified());
+}
+
+#[test]
+fn sanitize_snapshot_preserves_unknown_cpu_usage() {
+    let config = test_server_config(
+        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+        "http://127.0.0.1:8080".to_string(),
+        PathBuf::from("./data/server.json"),
+        PathBuf::from("./data/history.sqlite3"),
+        PathBuf::from("./data/snapshot.json"),
+    );
+    let snapshot = NodeSnapshot {
+        collected_at: Utc::now(),
+        cpu_usage_percent: None,
+        load: nodelite_proto::LoadAverage {
+            one: 0.0,
+            five: 0.0,
+            fifteen: 0.0,
+        },
+        memory: nodelite_proto::MemoryUsage {
+            total_bytes: 100,
+            used_bytes: 50,
+            available_bytes: 50,
+            swap_total_bytes: 0,
+            swap_used_bytes: 0,
+        },
+        uptime_secs: 5,
+        disks: Vec::new(),
+        network: nodelite_proto::NetworkCounters {
+            total_rx_bytes: 1,
+            total_tx_bytes: 2,
+            rx_bytes_per_sec: None,
+            tx_bytes_per_sec: None,
+        },
+    };
+
+    let (sanitized, report) = sanitize_snapshot(&config, snapshot);
+    assert_eq!(sanitized.cpu_usage_percent, None);
+    assert!(!report.modified());
 }
 
 #[test]
@@ -1051,7 +1090,7 @@ fn sanitize_caps_disk_field_string_length() {
     let oversized = "x".repeat(MAX_SANITIZED_STRING_BYTES * 4);
     let snapshot = NodeSnapshot {
         collected_at: Utc::now(),
-        cpu_usage_percent: 10.0,
+        cpu_usage_percent: Some(10.0),
         load: nodelite_proto::LoadAverage {
             one: 0.0,
             five: 0.0,
@@ -1147,7 +1186,7 @@ fn sanitize_snapshot_caps_disk_count_and_tracks_clean_reports() {
         .collect();
     let snapshot = NodeSnapshot {
         collected_at: Utc::now(),
-        cpu_usage_percent: 10.0,
+        cpu_usage_percent: Some(10.0),
         load: nodelite_proto::LoadAverage {
             one: 0.5,
             five: 0.7,
@@ -1239,7 +1278,7 @@ fn sanitize_snapshot_deduplicates_repeated_disk_devices() {
     };
     let snapshot = NodeSnapshot {
         collected_at: Utc::now(),
-        cpu_usage_percent: 1.0,
+        cpu_usage_percent: Some(1.0),
         load: nodelite_proto::LoadAverage {
             one: 0.1,
             five: 0.1,

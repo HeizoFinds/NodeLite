@@ -14,9 +14,11 @@
 - 补充 macOS Agent 从源码构建与运行的文档。
 - 更新服务端 README 中的性能基线说明。
 - 优化 Web UI 架构图注释的中文表达、布局平衡和标签间距。
+- WebSocket 线协议升级到 v2:Agent 首帧 CPU 使用率未知时上报 `null`,Server 继续兼容 v1 Agent。
 
 ### 修复
 - 稳定历史 API 负载测试，降低测试波动。
+- 修复 Agent 首帧 CPU 使用率被误报为 0 的问题,聚合、历史和 Prometheus 会跳过未知 CPU 样本。
 
 ## [v2.2.0] - 2026-05-23
 

@@ -186,12 +186,14 @@ fn render_snapshot_metrics(emitter: &mut MetricEmitter, node_id: &str, snapshot:
         &node_labels,
         snapshot.uptime_secs,
     );
-    emitter.gauge(
-        "nodelite_node_cpu_usage_ratio",
-        "Latest CPU usage ratio reported by the node in the range 0..1.",
-        &node_labels,
-        snapshot.cpu_usage_percent / 100.0,
-    );
+    if let Some(cpu_usage_percent) = snapshot.cpu_usage_percent.filter(|value| value.is_finite()) {
+        emitter.gauge(
+            "nodelite_node_cpu_usage_ratio",
+            "Latest CPU usage ratio reported by the node in the range 0..1.",
+            &node_labels,
+            cpu_usage_percent / 100.0,
+        );
+    }
     render_memory_metrics(emitter, node_id, snapshot);
     render_disk_metrics(emitter, node_id, snapshot);
     render_load_metrics(emitter, node_id, snapshot);
@@ -433,6 +435,29 @@ mod tests {
     }
 
     #[test]
+    fn exporter_skips_unknown_cpu_usage() {
+        let readiness = ServerReadiness::new(true);
+        let overview = sample_overview();
+        let mut statuses = sample_statuses();
+        statuses[0]
+            .snapshot
+            .as_mut()
+            .expect("sample node should have snapshot")
+            .cpu_usage_percent = None;
+
+        let body = render_prometheus_metrics(&readiness, &statuses, &overview);
+
+        assert_eq!(
+            body.lines()
+                .filter(|line| line.starts_with("nodelite_node_cpu_usage_ratio{"))
+                .count(),
+            1
+        );
+        assert!(!body.contains("nodelite_node_cpu_usage_ratio{node_id=\"node-1\""));
+        assert!(body.contains("nodelite_node_cpu_usage_ratio{node_id=\"node-2\""));
+    }
+
+    #[test]
     fn exporter_exposes_writer_counters() {
         let body = render_writer_metrics(WriterMetrics {
             history_dropped_writes: 3,
@@ -477,7 +502,7 @@ mod tests {
             remote_ip: None,
             snapshot: Some(NodeSnapshot {
                 collected_at: Utc::now(),
-                cpu_usage_percent: 42.0,
+                cpu_usage_percent: Some(42.0),
                 load: LoadAverage {
                     one: 0.25,
                     five: 0.5,

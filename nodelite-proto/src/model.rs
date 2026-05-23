@@ -69,7 +69,9 @@ pub struct NetworkCounters {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeSnapshot {
     pub collected_at: DateTime<Utc>,
-    pub cpu_usage_percent: f64,
+    /// CPU 使用率在 Agent 首次采样时没有前值可做差分,因此可能为空。
+    #[serde(default)]
+    pub cpu_usage_percent: Option<f64>,
     pub load: LoadAverage,
     pub memory: MemoryUsage,
     pub uptime_secs: u64,
@@ -99,7 +101,7 @@ pub struct NodeStatus {
 pub struct HistoryPoint {
     pub node_id: String,
     pub recorded_at: DateTime<Utc>,
-    pub cpu_usage_percent: f64,
+    pub cpu_usage_percent: Option<f64>,
     pub memory_used_percent: f64,
     pub rx_bytes_per_sec: Option<f64>,
     pub tx_bytes_per_sec: Option<f64>,

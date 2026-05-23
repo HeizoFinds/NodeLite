@@ -41,7 +41,7 @@ pub fn sanitize_snapshot(
 ) -> (NodeSnapshot, SanitizationReport) {
     let mut report = SanitizationReport::default();
     snapshot.cpu_usage_percent =
-        sanitize_percentage(snapshot.cpu_usage_percent, &mut report.clamped_percents);
+        sanitize_optional_percentage(snapshot.cpu_usage_percent, &mut report.clamped_percents);
     snapshot.load = sanitize_load_average(snapshot.load, &mut report);
     snapshot.memory = sanitize_memory_usage(snapshot.memory, &mut report);
     snapshot.network = sanitize_network_counters(snapshot.network, &mut report);
@@ -137,6 +137,10 @@ fn sanitize_percentage(value: f64, counter: &mut u32) -> f64 {
         *counter = counter.saturating_add(1);
     }
     sanitized
+}
+
+fn sanitize_optional_percentage(value: Option<f64>, counter: &mut u32) -> Option<f64> {
+    value.map(|v| sanitize_percentage(v, counter))
 }
 
 fn sanitize_non_negative_f64(value: f64, max: f64) -> f64 {
