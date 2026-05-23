@@ -195,6 +195,15 @@ impl HistoryStore {
         self.dropped_writes.load(Ordering::Relaxed)
     }
 
+    #[cfg(test)]
+    pub async fn writer_queue_depth(&self) -> usize {
+        let guard = self.writer_tx.read().await;
+        guard
+            .as_ref()
+            .map(|sender| sender.max_capacity().saturating_sub(sender.capacity()))
+            .unwrap_or(0)
+    }
+
     /// 尝试把一次节点状态记录到历史表。
     ///
     /// 节流通过 + channel 有空闲槽位时立即返回;否则静默 drop 并自增计数。
