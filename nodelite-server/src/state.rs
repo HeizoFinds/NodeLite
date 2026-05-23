@@ -36,10 +36,13 @@ pub struct SharedState {
     next_session_id: Arc<AtomicU64>,
     view_revision: Arc<AtomicU64>,
     view_cache: Arc<Mutex<ViewCache>>,
-    api_cache_build_lock: Arc<Mutex<()>>,
+    api_nodes_cache_build_lock: Arc<Mutex<()>>,
+    api_overview_cache_build_lock: Arc<Mutex<()>>,
     metrics_cache_build_lock: Arc<Mutex<()>>,
     #[cfg(test)]
-    api_cache_builds: Arc<AtomicU64>,
+    api_nodes_cache_builds: Arc<AtomicU64>,
+    #[cfg(test)]
+    api_overview_cache_builds: Arc<AtomicU64>,
     #[cfg(test)]
     metrics_cache_builds: Arc<AtomicU64>,
 }
@@ -52,10 +55,13 @@ impl SharedState {
             next_session_id: Arc::new(AtomicU64::new(1)),
             view_revision: Arc::new(AtomicU64::new(1)),
             view_cache: Arc::new(Mutex::new(ViewCache::default())),
-            api_cache_build_lock: Arc::new(Mutex::new(())),
+            api_nodes_cache_build_lock: Arc::new(Mutex::new(())),
+            api_overview_cache_build_lock: Arc::new(Mutex::new(())),
             metrics_cache_build_lock: Arc::new(Mutex::new(())),
             #[cfg(test)]
-            api_cache_builds: Arc::new(AtomicU64::new(0)),
+            api_nodes_cache_builds: Arc::new(AtomicU64::new(0)),
+            #[cfg(test)]
+            api_overview_cache_builds: Arc::new(AtomicU64::new(0)),
             #[cfg(test)]
             metrics_cache_builds: Arc::new(AtomicU64::new(0)),
         }
@@ -228,6 +234,11 @@ impl SharedState {
         (statuses, overview)
     }
 
+    async fn overview_data(&self) -> OverviewData {
+        let registry = self.registry.read().await;
+        registry.overview()
+    }
+
     /// 启动时从磁盘快照恢复状态,所有节点都视为离线直至首次心跳到达。
     pub async fn restore_statuses(&self, statuses: Vec<NodeStatus>) {
         let mut registry = self.registry.write().await;
@@ -248,7 +259,11 @@ impl SharedState {
             }
         }
 
-        let _build_guard = self.api_cache_build_lock.lock().await;
+        let build_lock = match kind {
+            ApiBodyKind::Nodes => &self.api_nodes_cache_build_lock,
+            ApiBodyKind::Overview => &self.api_overview_cache_build_lock,
+        };
+        let _build_guard = build_lock.lock().await;
         let revision = self.view_revision.load(Ordering::Acquire);
         {
             let cache = self.view_cache.lock().await;
@@ -258,28 +273,48 @@ impl SharedState {
         }
 
         #[cfg(test)]
-        self.api_cache_builds.fetch_add(1, Ordering::Relaxed);
+        match kind {
+            ApiBodyKind::Nodes => {
+                self.api_nodes_cache_builds.fetch_add(1, Ordering::Relaxed);
+            }
+            ApiBodyKind::Overview => {
+                self.api_overview_cache_builds
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
 
-        let (statuses, overview) = self.statuses_and_overview().await;
-        let nodes_body = Bytes::from(serde_json::to_vec(&statuses)?);
-        let overview_body = Bytes::from(serde_json::to_vec(&overview)?);
-
-        let selected = match kind {
-            ApiBodyKind::Nodes => nodes_body.clone(),
-            ApiBodyKind::Overview => overview_body.clone(),
+        let body = match kind {
+            ApiBodyKind::Nodes => {
+                let statuses = self.list_statuses().await;
+                Bytes::from(serde_json::to_vec(&statuses)?)
+            }
+            ApiBodyKind::Overview => {
+                let overview = self.overview_data().await;
+                Bytes::from(serde_json::to_vec(&overview)?)
+            }
         };
 
         if self.view_revision.load(Ordering::Acquire) == revision {
             let mut cache = self.view_cache.lock().await;
-            cache.store_api_bodies(revision, nodes_body, overview_body);
+            cache.store_api_body(revision, kind, body.clone());
         }
 
-        Ok(selected)
+        Ok(body)
     }
 
     #[cfg(test)]
     fn api_cache_build_count(&self) -> u64 {
-        self.api_cache_builds.load(Ordering::Relaxed)
+        self.api_nodes_cache_build_count() + self.api_overview_cache_build_count()
+    }
+
+    #[cfg(test)]
+    fn api_nodes_cache_build_count(&self) -> u64 {
+        self.api_nodes_cache_builds.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    fn api_overview_cache_build_count(&self) -> u64 {
+        self.api_overview_cache_builds.load(Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -480,17 +515,24 @@ mod tests {
 
         let first_nodes = shared.nodes_json_bytes().await.expect("nodes json");
         let first_overview = shared.overview_json_bytes().await.expect("overview json");
+        assert_eq!(shared.api_nodes_cache_build_count(), 1);
+        assert_eq!(shared.api_overview_cache_build_count(), 1);
 
         shared.mark_disconnected("hk-01", session_id).await;
+
+        let second_overview = shared
+            .overview_json_bytes()
+            .await
+            .expect("overview json after disconnect");
+        assert_eq!(shared.api_nodes_cache_build_count(), 1);
+        assert_eq!(shared.api_overview_cache_build_count(), 2);
 
         let second_nodes = shared
             .nodes_json_bytes()
             .await
             .expect("nodes json after disconnect");
-        let second_overview = shared
-            .overview_json_bytes()
-            .await
-            .expect("overview json after disconnect");
+        assert_eq!(shared.api_nodes_cache_build_count(), 2);
+        assert_eq!(shared.api_overview_cache_build_count(), 2);
 
         assert_ne!(first_nodes, second_nodes);
         assert_ne!(first_overview, second_overview);
@@ -527,6 +569,36 @@ mod tests {
         }
 
         assert_eq!(shared.api_cache_build_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn api_overview_and_nodes_caches_build_independently() {
+        let shared = SharedState::new(Arc::new(sample_config()));
+        shared
+            .register_node(sample_identity(), Some("198.51.100.10".to_string()))
+            .await;
+
+        let first_overview = shared.overview_json_bytes().await.expect("overview json");
+        assert_eq!(shared.api_overview_cache_build_count(), 1);
+        assert_eq!(
+            shared.api_nodes_cache_build_count(),
+            0,
+            "overview miss must not serialize or populate the nodes body",
+        );
+
+        let cached_overview = shared.overview_json_bytes().await.expect("overview json");
+        assert_eq!(first_overview, cached_overview);
+        assert_eq!(shared.api_overview_cache_build_count(), 1);
+        assert_eq!(shared.api_nodes_cache_build_count(), 0);
+
+        let first_nodes = shared.nodes_json_bytes().await.expect("nodes json");
+        assert_eq!(shared.api_overview_cache_build_count(), 1);
+        assert_eq!(shared.api_nodes_cache_build_count(), 1);
+
+        let cached_nodes = shared.nodes_json_bytes().await.expect("nodes json");
+        assert_eq!(first_nodes, cached_nodes);
+        assert_eq!(shared.api_overview_cache_build_count(), 1);
+        assert_eq!(shared.api_nodes_cache_build_count(), 1);
     }
 
     #[tokio::test]
