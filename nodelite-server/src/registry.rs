@@ -19,6 +19,7 @@ mod validate;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use nodelite_proto::{
@@ -39,8 +40,7 @@ pub use self::render::{
 use self::storage::release_registry_lock_with;
 use self::storage::{load_registry_state, mutate_registry_file};
 use self::token::{
-    authorize_identity, constant_time_eq, generate_token, hash_token,
-    is_token_current as is_token_generation_current, mint_install_session,
+    authorize_identity, constant_time_eq, generate_token, hash_token, mint_install_session,
     prune_expired_install_sessions,
 };
 #[cfg(test)]
@@ -93,12 +93,22 @@ pub struct RegisteredNode {
     pub token_expires_at: Option<DateTime<Utc>>,
 }
 
-/// 一次成功的 token 验证 / 颁发结果:同时返回身份和当时的代次,
-/// 供 WS 会话捕获 generation 用于后续 hot-path 比较。
+/// 一次成功的 token 验证 / 颁发结果:返回身份与 token 状态快照,
+/// 供 WS 会话缓存后避开每帧 registry 读锁。
 #[derive(Debug, Clone)]
 pub struct AuthorizedNode {
     pub identity: NodeIdentity,
     pub generation: u64,
+    pub token_expires_at: Option<DateTime<Utc>>,
+    pub registry_revision: u64,
+}
+
+/// 轻量 token 状态快照,供 WebSocket 会话在 registry revision 变化时刷新本地缓存。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegistryTokenStatus {
+    pub generation: u64,
+    pub token_expires_at: Option<DateTime<Utc>>,
+    pub registry_revision: u64,
 }
 
 /// `consume_install_token` 的成功返回值:Agent 拿到这个结构后即可写出本地配置。
@@ -137,6 +147,7 @@ pub struct InstallSession {
 pub struct NodeRegistry {
     path: Arc<PathBuf>,
     state: Arc<RwLock<RegistryState>>,
+    registry_revision: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -186,6 +197,7 @@ impl NodeRegistry {
         Ok(Self {
             path: Arc::new(path.to_path_buf()),
             state: Arc::new(RwLock::new(state)),
+            registry_revision: Arc::new(AtomicU64::new(1)),
         })
     }
 
@@ -199,29 +211,29 @@ impl NodeRegistry {
         validate_runtime_identity(identity)?;
         validate_non_empty("hello.token", token).map_err(RegistryError::validation)?;
         let state = self.state.read().await;
-        authorize_identity(&state.entries, identity, token)
+        authorize_identity(&state.entries, identity, token, self.registry_revision())
     }
 
-    /// 判断当前 session 的 token **代次** 是否仍是该节点的最新代次。
-    ///
-    /// #56 之前这里接收 token 字符串做常量时间比较;现在为了避免每条 WS 消息
-    /// 都跑 Argon2 verify(~20ms)的灾难性 CPU 占用, hot-path 改为只比较 generation。
-    /// generation 由 [`authorize`] 在 hello 阶段返回, 每次 `refresh_token` /
-    /// `issue_node --rotate-token` 都会让它 +1, 因此"管理员轮换了 token"会被
-    /// 立即感知。
+    #[cfg(test)]
     pub async fn is_token_current(&self, node_id: &str, session_generation: u64) -> bool {
-        let state = self.state.read().await;
-        is_token_generation_current(&state.entries, node_id, session_generation)
+        self.token_status(node_id)
+            .await
+            .is_some_and(|status| status.generation == session_generation)
     }
 
-    /// 查询节点 token 的过期时间。`None` 既可能表示节点不存在,也可能是旧注册表
-    /// 里的永不过期 token;调用方通常只在节点已通过认证后使用它。
-    pub async fn token_expires_at(&self, node_id: &str) -> Option<DateTime<Utc>> {
+    /// 返回节点当前 token 状态快照。WS 会话只在 registry revision 变化时调用它,
+    /// 平常每帧只比较本地缓存与 atomic revision。
+    pub async fn token_status(&self, node_id: &str) -> Option<RegistryTokenStatus> {
         let state = self.state.read().await;
         state
             .entries
             .get(node_id)
-            .and_then(|node| node.token_expires_at)
+            .and_then(|node| token_status_for_node(node, self.registry_revision(), Utc::now()))
+    }
+
+    /// 当前注册表状态版本。任一注册表 reload / 写入导致的内存状态变化都会递增。
+    pub fn registry_revision(&self) -> u64 {
+        self.registry_revision.load(Ordering::Acquire)
     }
 
     /// 刷新节点的 Token:生成新明文 token, 哈希入库,代次 +1, 延长过期时间。
@@ -268,6 +280,7 @@ impl NodeRegistry {
             return Ok(false);
         }
 
+        self.bump_registry_revision();
         *state = next_state;
         Ok(true)
     }
@@ -346,9 +359,41 @@ impl NodeRegistry {
     async fn replace_state_from_file(&self, file: RegistryFile) -> RegistryResult<()> {
         let state = storage::load_registry_state_from_file(self.path.as_path(), file)?;
         let mut guard = self.state.write().await;
+        self.bump_registry_revision();
         *guard = state;
         Ok(())
     }
+
+    fn bump_registry_revision(&self) {
+        self.registry_revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn hold_state_write_lock_for_test(
+        &self,
+        acquired: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let _guard = self.state.write().await;
+        let _ = acquired.send(());
+        let _ = release.await;
+    }
+}
+
+fn token_status_for_node(
+    node: &RegisteredNode,
+    registry_revision: u64,
+    now: DateTime<Utc>,
+) -> Option<RegistryTokenStatus> {
+    if !token::token_is_unexpired(node, now) {
+        return None;
+    }
+
+    Some(RegistryTokenStatus {
+        generation: node.token_generation,
+        token_expires_at: node.token_expires_at,
+        registry_revision,
+    })
 }
 
 /// 创建或更新一个节点:首次出现时插入新条目,已存在时按需轮换 token、覆盖标签等。

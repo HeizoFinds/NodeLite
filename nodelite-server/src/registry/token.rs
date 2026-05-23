@@ -46,6 +46,7 @@ pub(super) fn authorize_identity(
     entries: &HashMap<String, RegisteredNode>,
     identity: &NodeIdentity,
     token: &str,
+    registry_revision: u64,
 ) -> RegistryResult<AuthorizedNode> {
     if let Some(entry) = entries.get(identity.node_id.as_str()) {
         if !token_matches_entry(token, entry) {
@@ -65,23 +66,12 @@ pub(super) fn authorize_identity(
         return Ok(AuthorizedNode {
             identity,
             generation: entry.token_generation,
+            token_expires_at: entry.token_expires_at,
+            registry_revision,
         });
     }
 
     Err(RegistryError::Unauthorized)
-}
-
-pub(super) fn is_token_current(
-    entries: &HashMap<String, RegisteredNode>,
-    node_id: &str,
-    session_generation: u64,
-) -> bool {
-    if let Some(entry) = entries.get(node_id) {
-        return entry.token_generation == session_generation
-            && token_is_unexpired(entry, Utc::now());
-    }
-
-    false
 }
 
 /// 在两种 token 存储格式之间做兼容比较。
