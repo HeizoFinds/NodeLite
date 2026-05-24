@@ -169,7 +169,8 @@ fn html_attr_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        index_html, index_page_csp, node_html, node_page_csp, verify_2fa_html, verify_2fa_page_csp,
+        build_page_csp, extract_inline_tag_bodies, index_html, index_page_csp, node_html,
+        node_page_csp, verify_2fa_html, verify_2fa_page_csp,
     };
 
     #[test]
@@ -228,5 +229,25 @@ mod tests {
         let rendered = verify_2fa_html();
         assert!(rendered.contains("<!doctype html>"));
         assert!(rendered.contains("data-i18n=\"title\""));
+    }
+
+    #[test]
+    fn extract_inline_tag_bodies_stops_on_unclosed_blocks() {
+        let bodies = extract_inline_tag_bodies(
+            "<script>first()</script><script>second()",
+            "<script>",
+            "</script>",
+        );
+        assert_eq!(bodies, vec!["first()"]);
+    }
+
+    #[test]
+    fn build_page_csp_handles_templates_without_inline_assets() {
+        let csp = build_page_csp("<!doctype html><main>dashboard</main>");
+        assert!(csp.contains("script-src 'self' "));
+        assert!(csp.contains("style-src 'self' 'unsafe-inline' "));
+        assert!(csp.contains(
+            "connect-src 'self' https://raw.githubusercontent.com https://api.github.com"
+        ));
     }
 }
