@@ -109,3 +109,38 @@ jobs:
           cross build --locked --release --target "${{ matrix.target }}" \
             -p nodelite-server \
             -p nodelite-agent
+
+  agent-macos-build:
+    # 先只验证 Agent 的官方 macOS 构建目标,避免把 server/安装链路一起扩大。
+    name: Agent macOS Build ${{ matrix.target }}
+    needs: lint-and-test
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "${{ matrix.target }}"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-agent-macos-${{ matrix.target }}
+          workspaces: |
+            . -> target
+
+      - name: Build agent for macOS release target
+        # CI 先以编译通过为目标,真正的发布二进制仍在 release workflow 里产出。
+        run: cargo check --locked --target "${{ matrix.target }}" -p nodelite-agent

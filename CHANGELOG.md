@@ -9,9 +9,11 @@
 
 ### 新增
 - Agent 新增 macOS 采集器支持，可在 macOS 上采集并上报系统指标。
+- CI / GitHub Release 新增 macOS Agent 官方构建，覆盖 Intel 与 Apple Silicon 二进制。
 
 ### 变更
 - 补充 macOS Agent 从源码构建与运行的文档。
+- README 更新 Agent 官方发布范围说明，明确 macOS 仍建议手工部署。
 - 更新服务端 README 中的性能基线说明。
 - 优化 Web UI 架构图注释的中文表达、布局平衡和标签间距。
 - WebSocket 线协议升级到 v2:Agent 首帧 CPU 使用率未知时上报 `null`,Server 继续兼容 v1 Agent。

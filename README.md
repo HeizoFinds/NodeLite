@@ -56,7 +56,7 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
 - `nodelite-server`
   推荐部署在 Linux（systemd 环境），官方发布产物提供 `x86_64-unknown-linux-musl` 与 `aarch64-unknown-linux-musl`
 - `nodelite-agent`
-  支持 Linux 与 macOS；其中一键安装脚本和官方发布二进制当前仍仅覆盖 Linux，macOS 建议源码运行
+  支持 Linux 与 macOS；官方发布二进制覆盖 Linux 与 macOS（Intel / Apple Silicon），但一键安装脚本当前仍仅覆盖 Linux，macOS 推荐直接下载二进制或源码运行
 - 反向代理
   推荐使用 Nginx 或 Caddy 终结 HTTPS / WSS
 
@@ -687,7 +687,7 @@ sh scripts/install-agent.sh \
 
 ## 手工 Agent 启动
 
-如果你暂时不想用安装脚本，也可以手工部署 agent。macOS 当前推荐走这一种方式。
+如果你暂时不想用安装脚本，也可以手工部署 agent。macOS 当前推荐直接下载 GitHub Release 里的 `nodelite-agent-x86_64-apple-darwin` / `nodelite-agent-aarch64-apple-darwin`，再按这一种方式运行；安装脚本仍仅覆盖 Linux。
 
 1. 复制配置：
 
@@ -725,13 +725,17 @@ cargo run -p nodelite-agent -- --config config/agent.toml
 
 1. 交叉编译 Linux `x86_64-unknown-linux-musl`
 2. 交叉编译 Linux `aarch64-unknown-linux-musl`
-3. 生成 `nodelite-server-x86_64-unknown-linux-musl`
-4. 生成 `nodelite-agent-x86_64-unknown-linux-musl`
-5. 生成 `nodelite-server-aarch64-unknown-linux-musl`
-6. 生成 `nodelite-agent-aarch64-unknown-linux-musl`
-7. 上传 `install-server.sh` 和 `install-agent.sh`
-8. 上传 `SHA256SUMS.txt`
-9. 自动创建 GitHub Release
+3. 原生构建 Agent `x86_64-apple-darwin`
+4. 原生构建 Agent `aarch64-apple-darwin`
+5. 生成 `nodelite-server-x86_64-unknown-linux-musl`
+6. 生成 `nodelite-agent-x86_64-unknown-linux-musl`
+7. 生成 `nodelite-server-aarch64-unknown-linux-musl`
+8. 生成 `nodelite-agent-aarch64-unknown-linux-musl`
+9. 生成 `nodelite-agent-x86_64-apple-darwin`
+10. 生成 `nodelite-agent-aarch64-apple-darwin`
+11. 上传 `install-server.sh` 和 `install-agent.sh`
+12. 上传 `SHA256SUMS.txt`
+13. 自动创建 GitHub Release
 
 GitHub Release 编译出来的 agent 会把对应 tag 版本号上报到面板里，所以面板里看到的 Agent 版本会是 `1.0.x` 这种发布版本，而不是固定的开发版本号。
 

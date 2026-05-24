@@ -77,7 +77,7 @@ jobs:
       - name: Check dependency policy
         run: cargo deny check advisories
 
-  build:
+  build-linux:
     # 针对 x86_64 / aarch64 两个 musl 目标分别构建。
     name: Build ${{ matrix.target }}
     needs: validate
@@ -198,10 +198,90 @@ jobs:
             scripts/install-server.sh
             scripts/install-agent.sh
 
+  build-agent-macos:
+    # 先只发布 Agent 的 macOS 二进制,server 仍保持 Linux 官方发布范围。
+    name: Build agent ${{ matrix.target }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "${{ matrix.target }}"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-agent-macos-${{ matrix.target }}
+          workspaces: |
+            . -> target
+
+      - name: Stamp workspace version from tag
+        env:
+          RELEASE_TAG_NAME: ${{ env.RELEASE_TAG }}
+        run: |
+          export RELEASE_VERSION="${RELEASE_TAG_NAME#v}"
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          release_version = os.environ["RELEASE_VERSION"]
+          cargo_toml = Path("Cargo.toml")
+          content = cargo_toml.read_text()
+          pattern = re.compile(
+              r"(\[workspace\.package\]\s+version\s*=\s*\")([^\"]+)(\")",
+              re.MULTILINE,
+          )
+          updated, count = pattern.subn(rf"\g<1>{release_version}\g<3>", content, count=1)
+          if count != 1:
+              raise SystemExit("failed to stamp workspace.package.version in Cargo.toml")
+          cargo_toml.write_text(updated)
+          PY
+
+      - name: Build release agent binary
+        run: |
+          NODELITE_BUILD_VERSION="${RELEASE_TAG#v}" \
+          cargo build --locked --release --target "${{ matrix.target }}" -p nodelite-agent
+
+      - name: Collect release assets
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/nodelite-agent" "dist/nodelite-agent-${{ matrix.target }}"
+          shasum -a 256 \
+            "dist/nodelite-agent-${{ matrix.target }}" \
+            > "dist/SHA256SUMS-${{ matrix.target }}.txt"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-agent-${{ matrix.target }}
+          path: |
+            dist/nodelite-agent-${{ matrix.target }}
+            dist/SHA256SUMS-${{ matrix.target }}.txt
+
   release:
     # 汇总产物 → 合并校验文件 → 写入 GitHub Release。
     name: Publish GitHub Release
-    needs: build
+    needs:
+      - build-linux
+      - build-agent-macos
     runs-on: ubuntu-latest
 
     steps:
@@ -234,6 +314,8 @@ jobs:
             release-assets/release-x86_64-unknown-linux-musl/nodelite-agent-x86_64-unknown-linux-musl \
             release-assets/release-aarch64-unknown-linux-musl/nodelite-server-aarch64-unknown-linux-musl \
             release-assets/release-aarch64-unknown-linux-musl/nodelite-agent-aarch64-unknown-linux-musl \
+            release-assets/release-agent-x86_64-apple-darwin/nodelite-agent-x86_64-apple-darwin \
+            release-assets/release-agent-aarch64-apple-darwin/nodelite-agent-aarch64-apple-darwin \
             release-assets/release-scripts/install-server.sh \
             release-assets/release-scripts/install-agent.sh \
             release-assets/SHA256SUMS.txt \
