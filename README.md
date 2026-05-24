@@ -103,7 +103,7 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
 
 ### 2026-05-24 release 压测基线
 
-下面这组数据来自 2026-05-24 对当前版本执行的仓库内置 loopback 压测，使用 release 构建直接实测：
+下面这组数据来自 2026-05-24 在同一台机器上对当前版本连续执行 `3` 次仓库内置 loopback 压测后得到的均值，使用 release 构建直接实测：
 
 ```bash
 cargo test -p nodelite-server --release load_test_scaling_scores -- --ignored --nocapture
@@ -119,31 +119,31 @@ cargo test -p nodelite-server --release load_test_reconnect_storm_scores -- --ig
 
 | 节点数 | 全部接入耗时 | 收敛耗时 | 总 metrics 数 | metrics 吞吐 | overview p50 | overview p95 | overview max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 20 | 196.0 ms | 21.7 ms | 240 | 11037.4/s | 0.39 ms | 0.74 ms | 0.79 ms |
-| 50 | 473.2 ms | 21.3 ms | 600 | 28156.8/s | 0.45 ms | 2.84 ms | 33.68 ms |
-| 100 | 930.6 ms | 22.1 ms | 1200 | 54329.4/s | 0.49 ms | 1.50 ms | 3.22 ms |
-| 200 | 1904.1 ms | 21.8 ms | 2400 | 109972.1/s | 0.49 ms | 2.93 ms | 5.40 ms |
+| 20 | 167.2 ms | 21.8 ms | 240 | 11033.9/s | 0.50 ms | 0.60 ms | 1.14 ms |
+| 50 | 415.0 ms | 22.2 ms | 600 | 27091.9/s | 0.49 ms | 0.62 ms | 1.45 ms |
+| 100 | 823.1 ms | 21.9 ms | 1200 | 54880.1/s | 0.48 ms | 0.60 ms | 3.30 ms |
+| 200 | 1682.6 ms | 22.4 ms | 2400 | 107111.3/s | 0.49 ms | 1.52 ms | 5.53 ms |
 
 #### 200 节点读接口延迟
 
-`load_test_api_surface_scores` 在 steady-state 下持续上报 `3600` 条 metrics，同时对只读 API 做 20 轮采样；其中历史接口返回的是一个节点 `360` 个种子历史点对应的精确时间区间。
+`load_test_api_surface_scores` 在 steady-state 下持续上报 `3600` 条 metrics，同时对只读 API 做 20 轮采样；其中历史接口返回的是一个节点 `360` 个种子历史点对应的精确时间区间。下表同样使用 `3` 次重复执行后的均值。
 
 | 接口 | p50 | p95 | max |
 | --- | ---: | ---: | ---: |
-| `/api/overview` | 0.43 ms | 2.33 ms | 2.74 ms |
-| `/api/nodes` | 0.98 ms | 2.38 ms | 3.22 ms |
-| `/api/nodes/{node_id}` | 0.48 ms | 2.75 ms | 2.75 ms |
-| `/api/nodes/{node_id}/history` | 1.21 ms | 2.67 ms | 3.37 ms |
+| `/api/overview` | 0.52 ms | 2.75 ms | 6.58 ms |
+| `/api/nodes` | 1.15 ms | 2.83 ms | 3.80 ms |
+| `/api/nodes/{node_id}` | 0.54 ms | 2.87 ms | 3.19 ms |
+| `/api/nodes/{node_id}/history` | 1.58 ms | 4.09 ms | 5.72 ms |
 
 #### 200 节点重连风暴
 
-`load_test_reconnect_storm_scores` 会把 `200` 个节点连续拉起和断开 `4` 轮，共计 `800` 次会话建立。当前版本在这组压力下的关键指标如下：
+`load_test_reconnect_storm_scores` 会把 `200` 个节点连续拉起和断开 `4` 轮，共计 `800` 次会话建立。下面这些数值也使用 `3` 次重复执行后的均值：
 
-- **批量接入 p95**：1664.63 ms
-- **最后一轮指标恢复 p95**：67.21 ms
-- **批量断开完成 p95**：22.17 ms
-- **风暴期间 `/api/overview` p95**：2.86 ms
-- **风暴期间 `/api/nodes` p95**：3.27 ms
+- **批量接入 p95**：1659.81 ms
+- **最后一轮指标恢复 p95**：66.23 ms
+- **批量断开完成 p95**：23.34 ms
+- **风暴期间 `/api/overview` p95**：2.89 ms
+- **风暴期间 `/api/nodes` p95**：3.17 ms
 
 说明：
 
@@ -172,7 +172,7 @@ cargo test -p nodelite-server --release load_test_payload_size_scores -- --ignor
 
 每条 `*_RESULT` 输出都会包含对应场景的 p95 延迟、API body bytes 的 `p50/p95/max`、当前进程 RSS、history writer queue depth、dropped writes，以及 SQLite `db/wal/shm` 文件大小。
 
-本次同机实测的样本结果如下：
+下面这张表仍然是本次同机实测的单次样本结果，用来展示更大规模场景的大致量级，不作为多轮均值基线：
 
 | 场景 | 关键规模 | metrics 吞吐 | 关键 p95 | 响应体大小 | RSS | history dropped writes |
 | --- | --- | ---: | --- | --- | ---: | ---: |
