@@ -134,6 +134,10 @@ impl SharedState {
     }
 
     /// 更新某节点的最新快照。若该会话已被新会话替代,则返回 `None` 告知调用方丢弃。
+    ///
+    /// 注意:只 bump nodes_revision。overview / metrics 视图通过各自的 TTL
+    /// 容忍最多几秒的聚合数据滞后,以便高频上报场景下不再连带使三视图缓存
+    /// 同时失效。
     pub async fn update_snapshot(
         &self,
         node_id: &str,
@@ -143,17 +147,17 @@ impl SharedState {
         let mut registry = self.registry.write().await;
         let status = registry.update_snapshot(node_id, session_id, snapshot, Utc::now());
         if status.is_some() {
-            self.bump_view_revision();
+            self.bump_nodes_revision_only();
         }
         status
     }
 
-    /// 更新某节点的最新延迟值,语义同 `update_snapshot`。
+    /// 更新某节点的最新延迟值,语义同 `update_snapshot`(只 bump nodes_revision)。
     pub async fn update_latency(&self, node_id: &str, session_id: u64, latency_ms: u64) -> bool {
         let mut registry = self.registry.write().await;
         let updated = registry.update_latency(node_id, session_id, latency_ms, Utc::now());
         if updated {
-            self.bump_view_revision();
+            self.bump_nodes_revision_only();
         }
         updated
     }
@@ -364,13 +368,19 @@ impl SharedState {
         self.bump_view_revision();
     }
 
-    /// 当前阶段:所有 mutator 都把三个视图 revision 一起 bump,
-    /// 保持与单一 revision 的等价语义。后续 commit 会拆分,让 snapshot/latency
-    /// 之类的更新只触达真正受影响的视图。
+    /// 结构性变更(注册、断连、批量恢复)同时使三视图缓存失效。
     fn bump_view_revision(&self) {
         self.overview_revision.fetch_add(1, Ordering::AcqRel);
         self.nodes_revision.fetch_add(1, Ordering::AcqRel);
         self.metrics_revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// 单节点快照 / 延迟更新只让 nodes 视图立刻失效。
+    ///
+    /// overview 与 metrics 通过 TTL 容忍短期陈旧,从而避免高频 push 把三视图
+    /// 缓存连带打穿(见 issue #160)。
+    fn bump_nodes_revision_only(&self) {
+        self.nodes_revision.fetch_add(1, Ordering::AcqRel);
     }
 
     fn json_slot_for(&self, kind: ApiBodyKind) -> &Arc<Mutex<JsonViewSlot>> {
