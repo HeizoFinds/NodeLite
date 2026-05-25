@@ -35,6 +35,11 @@ enum ApiBodyKind {
     Nodes,
     Overview,
 }
+
+/// Overview 聚合允许的最大"陈旧时间":即使 overview revision 没有递增,
+/// 缓存超过这个时长后也会强制重建。配合后续 commit 把 snapshot/latency
+/// 的 revision 影响范围收窄到 nodes,避免聚合数据无限期不刷新。
+const OVERVIEW_CACHE_MAX_STALE: Duration = Duration::from_secs(1);
 use crate::ServerReadiness;
 use crate::handlers::metrics_exporter::{
     ApiCacheMetrics, SqliteWalCheckpointMetrics, WsMessageMetrics, render_prometheus_metrics,
@@ -382,13 +387,21 @@ impl SharedState {
         }
     }
 
+    fn max_age_for(&self, kind: ApiBodyKind) -> Option<Duration> {
+        match kind {
+            ApiBodyKind::Nodes => None,
+            ApiBodyKind::Overview => Some(OVERVIEW_CACHE_MAX_STALE),
+        }
+    }
+
     async fn cached_api_json_bytes(&self, kind: ApiBodyKind) -> Result<Bytes, serde_json::Error> {
         let slot = self.json_slot_for(kind);
         let revision_atomic = self.revision_atomic_for(kind);
+        let max_age = self.max_age_for(kind);
         let revision = revision_atomic.load(Ordering::Acquire);
         {
             let cache = slot.lock().await;
-            if let Some(body) = cache.get(revision) {
+            if let Some(body) = cache.get(revision, max_age) {
                 self.record_api_cache_hit(kind);
                 return Ok(body);
             }
@@ -402,7 +415,7 @@ impl SharedState {
         let revision = revision_atomic.load(Ordering::Acquire);
         {
             let cache = slot.lock().await;
-            if let Some(body) = cache.get(revision) {
+            if let Some(body) = cache.get(revision, max_age) {
                 self.record_api_cache_hit(kind);
                 return Ok(body);
             }

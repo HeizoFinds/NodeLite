@@ -31,23 +31,35 @@ impl ReadinessSnapshot {
     }
 }
 
-/// 简单 JSON 视图(overview / nodes)的缓存槽:仅按 revision 校验。
+/// 简单 JSON 视图(overview / nodes)的缓存槽:可选 TTL 校验。
+///
+/// `max_age = None` 时退化为纯 revision 校验(nodes 视图的当前行为);
+/// `max_age = Some(d)` 时除 revision 外还要求 cached_at + d > now,
+/// 用于 overview 在 revision 长期不变时仍能定期重建,避免聚合数据无限陈旧。
 #[derive(Debug, Default)]
 pub(super) struct JsonViewSlot {
     revision: u64,
+    cached_at: Option<Instant>,
     body: Option<Bytes>,
 }
 
 impl JsonViewSlot {
-    pub(super) fn get(&self, revision: u64) -> Option<Bytes> {
+    pub(super) fn get(&self, revision: u64, max_age: Option<Duration>) -> Option<Bytes> {
         if self.revision != revision {
             return None;
+        }
+        if let Some(max_age) = max_age {
+            let cached_at = self.cached_at?;
+            if cached_at.elapsed() > max_age {
+                return None;
+            }
         }
         self.body.clone()
     }
 
     pub(super) fn store(&mut self, revision: u64, body: Bytes) {
         self.revision = revision;
+        self.cached_at = Some(Instant::now());
         self.body = Some(body);
     }
 }
