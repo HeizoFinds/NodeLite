@@ -6,13 +6,6 @@ use axum::body::Bytes;
 
 use crate::ServerReadiness;
 
-/// `/api/overview` 与 `/api/nodes` 的缓存键。
-#[derive(Debug, Clone, Copy)]
-pub(super) enum ApiBodyKind {
-    Nodes,
-    Overview,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ReadinessSnapshot {
     ready: bool,
@@ -38,73 +31,72 @@ impl ReadinessSnapshot {
     }
 }
 
+/// 简单 JSON 视图(overview / nodes)的缓存槽:仅按 revision 校验。
 #[derive(Debug, Default)]
-pub(super) struct ViewCache {
+pub(super) struct JsonViewSlot {
     revision: u64,
-    nodes_json: Option<Bytes>,
-    overview_json: Option<Bytes>,
-    metrics_revision: u64,
-    metrics_readiness: Option<ReadinessSnapshot>,
-    metrics_cached_at: Option<Instant>,
-    metrics_text: Option<Bytes>,
+    body: Option<Bytes>,
 }
 
-impl ViewCache {
-    pub(super) fn api_body(&self, revision: u64, kind: ApiBodyKind) -> Option<Bytes> {
+impl JsonViewSlot {
+    pub(super) fn get(&self, revision: u64) -> Option<Bytes> {
         if self.revision != revision {
             return None;
         }
-
-        match kind {
-            ApiBodyKind::Nodes => self.nodes_json.clone(),
-            ApiBodyKind::Overview => self.overview_json.clone(),
-        }
+        self.body.clone()
     }
 
-    pub(super) fn store_api_body(&mut self, revision: u64, kind: ApiBodyKind, body: Bytes) {
-        if self.revision != revision {
-            self.revision = revision;
-            self.nodes_json = None;
-            self.overview_json = None;
-        }
-
-        match kind {
-            ApiBodyKind::Nodes => self.nodes_json = Some(body),
-            ApiBodyKind::Overview => self.overview_json = Some(body),
-        }
+    pub(super) fn store(&mut self, revision: u64, body: Bytes) {
+        self.revision = revision;
+        self.body = Some(body);
     }
+}
 
-    pub(super) fn metrics_body(
+/// Prometheus `/metrics` 文本的缓存槽:revision、readiness 与 TTL 三重校验。
+#[derive(Debug, Default)]
+pub(super) struct MetricsViewSlot {
+    revision: u64,
+    readiness: Option<ReadinessSnapshot>,
+    cached_at: Option<Instant>,
+    body: Option<Bytes>,
+}
+
+impl MetricsViewSlot {
+    pub(super) fn get(
         &self,
         revision: u64,
         readiness: ReadinessSnapshot,
         max_age: Duration,
     ) -> Option<Bytes> {
-        if self.metrics_revision != revision {
+        if self.revision != revision {
             return None;
         }
-        if self.metrics_readiness != Some(readiness) {
+        if self.readiness != Some(readiness) {
             return None;
         }
         if self
-            .metrics_cached_at
+            .cached_at
             .is_none_or(|cached_at| cached_at.elapsed() > max_age)
         {
             return None;
         }
-
-        self.metrics_text.clone()
+        self.body.clone()
     }
 
-    pub(super) fn store_metrics_body(
-        &mut self,
-        revision: u64,
-        readiness: ReadinessSnapshot,
-        body: Bytes,
-    ) {
-        self.metrics_revision = revision;
-        self.metrics_readiness = Some(readiness);
-        self.metrics_cached_at = Some(Instant::now());
-        self.metrics_text = Some(body);
+    pub(super) fn store(&mut self, revision: u64, readiness: ReadinessSnapshot, body: Bytes) {
+        self.revision = revision;
+        self.readiness = Some(readiness);
+        self.cached_at = Some(Instant::now());
+        self.body = Some(body);
     }
+}
+
+/// 旧的"单缓存条目"包装:仍是 SharedState 持有的唯一 ViewCache 类型,但内部按视图独立持槽。
+///
+/// 拆分锁与拆分 revision 的步骤会在后续 commit 引入,这里仅做结构重组。
+#[derive(Debug, Default)]
+pub(super) struct ViewCache {
+    pub(super) overview: JsonViewSlot,
+    pub(super) nodes: JsonViewSlot,
+    pub(super) metrics: MetricsViewSlot,
 }

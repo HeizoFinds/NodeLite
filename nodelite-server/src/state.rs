@@ -28,7 +28,27 @@ pub(crate) use self::session_control::{
     SessionCommand, SessionCommandError, SessionControlHandle, SessionRefreshReply,
 };
 use self::sqlite_wal::SqliteWalCheckpointObserver;
-use self::view_cache::{ApiBodyKind, ReadinessSnapshot, ViewCache};
+use self::view_cache::{JsonViewSlot, ReadinessSnapshot, ViewCache};
+
+#[derive(Debug, Clone, Copy)]
+enum ApiBodyKind {
+    Nodes,
+    Overview,
+}
+
+fn json_slot(cache: &ViewCache, kind: ApiBodyKind) -> &JsonViewSlot {
+    match kind {
+        ApiBodyKind::Nodes => &cache.nodes,
+        ApiBodyKind::Overview => &cache.overview,
+    }
+}
+
+fn json_slot_mut(cache: &mut ViewCache, kind: ApiBodyKind) -> &mut JsonViewSlot {
+    match kind {
+        ApiBodyKind::Nodes => &mut cache.nodes,
+        ApiBodyKind::Overview => &mut cache.overview,
+    }
+}
 use crate::ServerReadiness;
 use crate::handlers::metrics_exporter::{
     ApiCacheMetrics, SqliteWalCheckpointMetrics, WsMessageMetrics, render_prometheus_metrics,
@@ -290,7 +310,7 @@ impl SharedState {
 
         {
             let cache = self.view_cache.lock().await;
-            if let Some(body) = cache.metrics_body(revision, readiness_snapshot, max_age) {
+            if let Some(body) = cache.metrics.get(revision, readiness_snapshot, max_age) {
                 self.record_metrics_cache_hit();
                 return body;
             }
@@ -301,7 +321,7 @@ impl SharedState {
         let readiness_snapshot = ReadinessSnapshot::capture(readiness);
         {
             let cache = self.view_cache.lock().await;
-            if let Some(body) = cache.metrics_body(revision, readiness_snapshot, max_age) {
+            if let Some(body) = cache.metrics.get(revision, readiness_snapshot, max_age) {
                 self.record_metrics_cache_hit();
                 return body;
             }
@@ -319,7 +339,7 @@ impl SharedState {
 
         if self.view_revision.load(Ordering::Acquire) == revision {
             let mut cache = self.view_cache.lock().await;
-            cache.store_metrics_body(revision, readiness_snapshot, body.clone());
+            cache.metrics.store(revision, readiness_snapshot, body.clone());
         }
 
         body
@@ -353,7 +373,7 @@ impl SharedState {
         let revision = self.view_revision.load(Ordering::Acquire);
         {
             let cache = self.view_cache.lock().await;
-            if let Some(body) = cache.api_body(revision, kind) {
+            if let Some(body) = json_slot(&cache, kind).get(revision) {
                 self.record_api_cache_hit(kind);
                 return Ok(body);
             }
@@ -367,7 +387,7 @@ impl SharedState {
         let revision = self.view_revision.load(Ordering::Acquire);
         {
             let cache = self.view_cache.lock().await;
-            if let Some(body) = cache.api_body(revision, kind) {
+            if let Some(body) = json_slot(&cache, kind).get(revision) {
                 self.record_api_cache_hit(kind);
                 return Ok(body);
             }
@@ -389,7 +409,7 @@ impl SharedState {
 
         if self.view_revision.load(Ordering::Acquire) == revision {
             let mut cache = self.view_cache.lock().await;
-            cache.store_api_body(revision, kind, body.clone());
+            json_slot_mut(&mut cache, kind).store(revision, body.clone());
         }
 
         Ok(body)
