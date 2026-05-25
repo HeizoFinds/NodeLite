@@ -147,3 +147,11 @@ async fn load_test_payload_size_scores() {
         panic!("{error:#}");
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "manual concurrent read+write load test; run with -- --ignored --nocapture"]
+async fn load_test_concurrent_read_write_scores() {
+    if let Err(error) = large_scale::run_concurrent_read_write_load_test().await {
+        panic!("{error:#}");
+    }
+}
