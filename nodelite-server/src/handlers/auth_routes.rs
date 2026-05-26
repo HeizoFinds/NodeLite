@@ -99,12 +99,11 @@ pub(crate) async fn require_readonly_auth(
 ) -> Response {
     let meta = readonly_auth_meta(&state, &headers, &request);
     let auth = state.readonly_auth.read().await;
-    let Some((basic_authorized, two_factor_enabled)) =
-        evaluate_readonly_auth(&state, &auth, &headers, &request)
-    else {
+    let evaluated = evaluate_readonly_auth(&state, &auth, &headers, &request);
+    drop(auth);
+    let Some((basic_authorized, two_factor_enabled)) = evaluated else {
         return next.run(request).await;
     };
-    drop(auth);
     if let Some(response) = enforce_readonly_auth_limits(&state, &meta).await {
         return response;
     }
