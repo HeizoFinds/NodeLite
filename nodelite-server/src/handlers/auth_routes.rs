@@ -8,6 +8,7 @@ use axum::{Json, extract::Request};
 use serde_json::json;
 use tracing::error;
 
+use super::record_audit_event;
 use crate::AppState;
 use crate::admission::resolve_client_ip;
 use crate::audit::{AuditEventType, NewAuditEvent};
@@ -484,20 +485,6 @@ async fn record_readonly_auth_block(
         }),
     )
     .await;
-}
-
-async fn record_audit_event(
-    state: &AppState,
-    event_type: AuditEventType,
-    client_ip: String,
-    success: bool,
-    audit_user_agent: Option<String>,
-    details: serde_json::Value,
-) {
-    let mut event = NewAuditEvent::now(event_type, client_ip, success);
-    event.user_agent = audit_user_agent;
-    event.details = details;
-    state.audit_log.record_best_effort(event).await;
 }
 
 fn readonly_auth_block_response(retry_after_secs: u64) -> Response {

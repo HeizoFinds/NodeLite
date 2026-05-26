@@ -80,7 +80,8 @@ fn decode_totp_secret_bytes(normalized: &str) -> Option<Vec<u8>> {
 
 pub(super) fn validate_totp_secret(field: &str, value: &str) -> Result<(), ConfigError> {
     validate_non_empty(field, value)?;
-    let decoded = decode_totp_secret_bytes(value);
+    let value = normalize_totp_secret(value);
+    let decoded = decode_totp_secret_bytes(&value);
     let Some(decoded) = decoded else {
         return Err(ConfigError::new(format!(
             "{field} must be a valid RFC4648 base32 TOTP secret"

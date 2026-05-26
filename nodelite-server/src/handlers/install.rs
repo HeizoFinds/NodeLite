@@ -6,9 +6,10 @@ use axum::response::{IntoResponse, Response};
 use serde_json::json;
 use tracing::error;
 
+use super::record_audit_event;
 use crate::AppState;
 use crate::admission::resolve_client_ip;
-use crate::audit::{AuditEventType, NewAuditEvent};
+use crate::audit::AuditEventType;
 use crate::registry::render_agent_config;
 
 const INSTALL_AGENT_SCRIPT: &str = include_str!("../../../scripts/install-agent.sh");
@@ -136,6 +137,7 @@ async fn record_install_block(
         state,
         AuditEventType::RateLimitExceeded,
         client_ip.to_string(),
+        false,
         audit_user_agent.clone(),
         json!({
             "endpoint": "/install/bootstrap",
@@ -157,6 +159,7 @@ async fn record_install_token_failure(
         state,
         AuditEventType::TokenInvalid,
         client_ip.to_string(),
+        false,
         audit_user_agent.clone(),
         json!({
             "endpoint": "/install/bootstrap",
@@ -164,19 +167,6 @@ async fn record_install_token_failure(
         }),
     )
     .await;
-}
-
-async fn record_audit_event(
-    state: &AppState,
-    event_type: AuditEventType,
-    client_ip: String,
-    audit_user_agent: Option<String>,
-    details: serde_json::Value,
-) {
-    let mut event = NewAuditEvent::now(event_type, client_ip, false);
-    event.user_agent = audit_user_agent;
-    event.details = details;
-    state.audit_log.record_best_effort(event).await;
 }
 
 fn request_user_agent(request: &Request) -> Option<String> {
