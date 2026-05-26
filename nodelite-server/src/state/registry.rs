@@ -18,6 +18,7 @@ pub(super) struct Registry {
 #[derive(Debug, Clone)]
 struct NodeEntry {
     status: NodeStatus,
+    summary: NodeListItem,
     active_session_id: Option<u64>,
     control: Option<SessionControlHandle>,
 }
@@ -40,6 +41,12 @@ impl Registry {
                 latency_ms: None,
                 online: true,
             },
+            summary: NodeListItem {
+                identity: nodelite_proto::NodeListIdentity::from(&identity),
+                snapshot: None,
+                latency_ms: None,
+                online: true,
+            },
             active_session_id: Some(session_id),
             control: None,
         });
@@ -51,6 +58,7 @@ impl Registry {
         entry.status.latency_ms = None;
         entry.active_session_id = Some(session_id);
         entry.control = None;
+        entry.summary = NodeListItem::from(&entry.status);
     }
 
     pub(super) fn update_snapshot(
@@ -68,6 +76,7 @@ impl Registry {
         entry.status.snapshot = Some(snapshot);
         entry.status.last_seen = Some(now);
         entry.status.online = true;
+        entry.summary = NodeListItem::from(&entry.status);
         Some(entry.status.clone())
     }
 
@@ -88,6 +97,7 @@ impl Registry {
         entry.status.latency_ms = Some(latency_ms);
         entry.status.last_seen = Some(now);
         entry.status.online = true;
+        entry.summary = NodeListItem::from(&entry.status);
         true
     }
 
@@ -99,6 +109,7 @@ impl Registry {
             entry.active_session_id = None;
             entry.status.online = false;
             entry.control = None;
+            entry.summary.online = false;
             return true;
         }
         false
@@ -135,6 +146,7 @@ impl Registry {
                 entry.status.online = false;
                 entry.active_session_id = None;
                 entry.control = None;
+                entry.summary.online = false;
                 marked += 1;
             }
         }
@@ -168,7 +180,7 @@ impl Registry {
         let mut summaries: Vec<NodeListItem> = self
             .nodes
             .values()
-            .map(|entry| NodeListItem::from(&entry.status))
+            .map(|entry| entry.summary.clone())
             .collect();
         summaries.sort_by(|left, right| {
             left.identity
@@ -211,11 +223,13 @@ impl Registry {
         self.nodes.clear();
         for mut status in statuses {
             status.online = false;
+            let summary = NodeListItem::from(&status);
             let node_id = status.identity.node_id.clone();
             self.nodes.insert(
                 node_id,
                 NodeEntry {
                     status,
+                    summary,
                     active_session_id: None,
                     control: None,
                 },
