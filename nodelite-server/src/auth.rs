@@ -11,6 +11,8 @@
 //! 这一层不直接持有 `AppState`,避免 main.rs 的总状态结构反过来产生循环依赖。
 //! 调用方在 handler 里把 `AppState` 拆成所需字段后再调用本模块。
 
+mod common_passwords;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -26,6 +28,7 @@ use subtle::ConstantTimeEq;
 use totp_lite::{Sha1, totp_custom};
 use tracing::warn;
 
+use self::common_passwords::COMMON_PASSWORDS;
 use crate::encoding::hex_encode;
 
 /// 密码强度验证 (#92):
@@ -75,111 +78,6 @@ pub(crate) fn validate_password_strength(password: &str) -> Result<(), &'static 
 
 /// 检查是否命中 top-100 弱密码字典(忽略大小写, 并对去除非字母数字后做归一化匹配)。
 fn is_common_password(password: &str) -> bool {
-    const COMMON_PASSWORDS: &[&str] = &[
-        "password",
-        "password1",
-        "password123",
-        "password12",
-        "password1234",
-        "123456",
-        "12345678",
-        "123456789",
-        "1234567890",
-        "qwerty",
-        "abc123",
-        "monkey",
-        "1234567",
-        "letmein",
-        "trustno1",
-        "dragon",
-        "baseball",
-        "iloveyou",
-        "master",
-        "sunshine",
-        "ashley",
-        "bailey",
-        "passw0rd",
-        "shadow",
-        "123123",
-        "654321",
-        "superman",
-        "qazwsx",
-        "michael",
-        "football",
-        "welcome",
-        "jesus",
-        "ninja",
-        "mustang",
-        "password!",
-        "admin",
-        "admin123",
-        "root",
-        "toor",
-        "pass",
-        "test",
-        "guest",
-        "info",
-        "adm",
-        "mysql",
-        "user",
-        "administrator",
-        "oracle",
-        "ftp",
-        "pi",
-        "puppet",
-        "ansible",
-        "ec2-user",
-        "vagrant",
-        "azureuser",
-        "changeme",
-        "changeme123",
-        "default",
-        "password@123",
-        "p@ssw0rd",
-        "p@ssword",
-        "passw0rd!",
-        "admin@123",
-        "root123",
-        "test123",
-        "demo",
-        "demo123",
-        "sample",
-        "temp",
-        "temp123",
-        "nodelite",
-        "monitor",
-        "monitoring",
-        "server",
-        "agent",
-        "qwerty123",
-        "abc123456",
-        "letmein123",
-        "welcome123",
-        "123qwe",
-        "qwe123",
-        "1q2w3e4r",
-        "1qaz2wsx",
-        "zxcvbnm",
-        "asdfgh",
-        "qwertyuiop",
-        "1234qwer",
-        "qwer1234",
-        "abcd1234",
-        "password1!",
-        "password123!",
-        "admin1234",
-        "root1234",
-        "pass1234",
-        "test1234",
-        "demo1234",
-        "temp1234",
-        "user1234",
-        "welcome1",
-        "admin123!@#",
-        "admin123!@#$",
-        "welcome123!@",
-    ];
-
     let lower = password.to_lowercase();
     if COMMON_PASSWORDS.contains(&lower.as_str()) {
         return true;
