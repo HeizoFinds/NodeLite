@@ -1,5 +1,9 @@
 //! 主机指标采集器入口:按目标平台分派到具体实现。
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "collector/shared.rs"]
+mod shared;
+
 #[cfg(target_os = "linux")]
 #[path = "collector_linux.rs"]
 mod collector_linux;

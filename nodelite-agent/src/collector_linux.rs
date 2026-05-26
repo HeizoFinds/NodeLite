@@ -15,32 +15,14 @@ use nodelite_proto::{
 };
 use tracing::warn;
 
+use super::shared::{
+    CpuSample, NetworkSample, NetworkTotals, compute_cpu_usage, compute_network_rates,
+};
+
 /// 采集器状态:为了计算 CPU/网络的"差分速率",需要保留上一次的采样值。
 pub struct HostCollector {
     previous_cpu: Option<CpuSample>,
     previous_network: Option<NetworkSample>,
-}
-
-/// 一次 `/proc/stat` 的聚合 CPU 计数:`total` 与 `idle` 字段之和。
-#[derive(Debug, Clone, Copy)]
-struct CpuSample {
-    total: u64,
-    idle: u64,
-}
-
-/// 一次 `/proc/net/dev` 的累计计数,附带读取时刻用于计算速率。
-#[derive(Debug, Clone, Copy)]
-struct NetworkSample {
-    observed_at: Instant,
-    rx_bytes: u64,
-    tx_bytes: u64,
-}
-
-/// 仅包含累计计数的中间结构,不参与速率计算。
-#[derive(Debug, Clone, Copy)]
-struct NetworkTotals {
-    rx_bytes: u64,
-    tx_bytes: u64,
 }
 
 pub fn new_collector() -> HostCollector {
@@ -225,17 +207,6 @@ fn parse_cpu_sample(content: &str) -> Result<CpuSample> {
     Ok(CpuSample { total, idle })
 }
 
-/// 根据两次 CPU 采样的差分计算占用率(%)。
-fn compute_cpu_usage(previous: CpuSample, current: CpuSample) -> f64 {
-    let total_delta = current.total.saturating_sub(previous.total);
-    let idle_delta = current.idle.saturating_sub(previous.idle);
-    if total_delta == 0 {
-        return 0.0;
-    }
-    let busy = total_delta.saturating_sub(idle_delta);
-    percentage(busy, total_delta)
-}
-
 /// 解析 `/proc/loadavg` 的前三个字段(1/5/15 分钟平均负载)。
 fn parse_load_average(content: &str) -> Result<LoadAverage> {
     let mut fields = content.split_whitespace();
@@ -372,27 +343,6 @@ fn parse_network_line_counters(counters: &str, iface: &str) -> Result<(u64, u64)
     }
 
     Ok((rx_bytes.unwrap_or(0), tx_bytes.unwrap_or(0)))
-}
-
-/// 用两次采样的时间差与累计字节差,折算成每秒速率;
-/// 计数回绕(例如代理重启)时返回 `None`,避免出现负数或荒诞峰值。
-fn compute_network_rates(
-    previous: NetworkSample,
-    observed_at: Instant,
-    current: NetworkTotals,
-) -> (Option<f64>, Option<f64>) {
-    let elapsed = observed_at
-        .duration_since(previous.observed_at)
-        .as_secs_f64();
-    if elapsed <= f64::EPSILON {
-        return (None, None);
-    }
-
-    let rx_rate = (current.rx_bytes >= previous.rx_bytes)
-        .then(|| (current.rx_bytes - previous.rx_bytes) as f64 / elapsed);
-    let tx_rate = (current.tx_bytes >= previous.tx_bytes)
-        .then(|| (current.tx_bytes - previous.tx_bytes) as f64 / elapsed);
-    (rx_rate, tx_rate)
 }
 
 /// 遍历 `/proc/mounts` 并通过 `statvfs` 获取各挂载点的容量信息。

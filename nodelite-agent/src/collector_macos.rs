@@ -17,33 +17,15 @@ use nodelite_proto::{
 };
 use tracing::warn;
 
+use super::shared::{
+    CpuSample, NetworkSample, NetworkTotals, compute_cpu_usage, compute_network_rates,
+};
+
 /// 采集器状态:为了计算 CPU/网络的"差分速率",需要保留上一次的采样值。
 pub struct HostCollector {
     previous_cpu: Option<CpuSample>,
     previous_network: Option<NetworkSample>,
     network_interfaces: NetworkInterfaceCache,
-}
-
-/// 一次 CPU 采样的总 tick 与 idle tick。
-#[derive(Debug, Clone, Copy)]
-struct CpuSample {
-    total: u64,
-    idle: u64,
-}
-
-/// 一次网络累计计数,附带采样时刻用于计算速率。
-#[derive(Debug, Clone, Copy)]
-struct NetworkSample {
-    observed_at: Instant,
-    rx_bytes: u64,
-    tx_bytes: u64,
-}
-
-/// 仅包含累计计数的中间结构,不参与速率计算。
-#[derive(Debug, Clone, Copy)]
-struct NetworkTotals {
-    rx_bytes: u64,
-    tx_bytes: u64,
 }
 
 /// macOS 的完整接口列表来自 `NET_RT_IFLIST2`,返回体会随 VPN/虚拟网卡变化。
@@ -329,16 +311,6 @@ fn collect_cpu_sample() -> Result<CpuSample> {
     }
 
     Ok(CpuSample { total, idle })
-}
-
-fn compute_cpu_usage(previous: CpuSample, current: CpuSample) -> f64 {
-    let total_delta = current.total.saturating_sub(previous.total);
-    let idle_delta = current.idle.saturating_sub(previous.idle);
-    if total_delta == 0 {
-        return 0.0;
-    }
-    let busy = total_delta.saturating_sub(idle_delta);
-    percentage(busy, total_delta)
 }
 
 fn collect_load_average() -> Result<LoadAverage> {
@@ -697,25 +669,6 @@ impl Drop for IfAddrsGuard {
             libc::freeifaddrs(self.0);
         }
     }
-}
-
-fn compute_network_rates(
-    previous: NetworkSample,
-    observed_at: Instant,
-    current: NetworkTotals,
-) -> (Option<f64>, Option<f64>) {
-    let elapsed = observed_at
-        .duration_since(previous.observed_at)
-        .as_secs_f64();
-    if elapsed <= f64::EPSILON {
-        return (None, None);
-    }
-
-    let rx_rate = (current.rx_bytes >= previous.rx_bytes)
-        .then(|| (current.rx_bytes - previous.rx_bytes) as f64 / elapsed);
-    let tx_rate = (current.tx_bytes >= previous.tx_bytes)
-        .then(|| (current.tx_bytes - previous.tx_bytes) as f64 / elapsed);
-    (rx_rate, tx_rate)
 }
 
 #[cfg(test)]
