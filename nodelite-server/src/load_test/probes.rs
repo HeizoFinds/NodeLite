@@ -132,6 +132,47 @@ pub(super) async fn probe_metrics(
     probe_endpoint(addr, "/metrics", samples, 50, validate_metrics_body).await
 }
 
+pub(super) async fn probe_overview_until(
+    addr: SocketAddr,
+    deadline: Instant,
+    inter_request_delay: Duration,
+) -> Result<Vec<HttpProbeSample>> {
+    let mut samples = Vec::new();
+    while Instant::now() < deadline {
+        let (latency, body) = fetch_http_latency(addr, "/api/overview").await?;
+        validate_overview_body(&body)?;
+        samples.push(HttpProbeSample {
+            latency,
+            body_bytes: body.len(),
+        });
+        if !inter_request_delay.is_zero() {
+            sleep(inter_request_delay).await;
+        }
+    }
+    Ok(samples)
+}
+
+pub(super) async fn probe_nodes_until(
+    addr: SocketAddr,
+    deadline: Instant,
+    inter_request_delay: Duration,
+    expected_nodes: usize,
+) -> Result<Vec<HttpProbeSample>> {
+    let mut samples = Vec::new();
+    while Instant::now() < deadline {
+        let (latency, body) = fetch_http_latency(addr, "/api/nodes").await?;
+        validate_nodes_body(&body, expected_nodes)?;
+        samples.push(HttpProbeSample {
+            latency,
+            body_bytes: body.len(),
+        });
+        if !inter_request_delay.is_zero() {
+            sleep(inter_request_delay).await;
+        }
+    }
+    Ok(samples)
+}
+
 pub(super) async fn probe_dashboard_refreshes(
     addr: SocketAddr,
     samples: usize,

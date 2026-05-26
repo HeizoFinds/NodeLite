@@ -7,14 +7,14 @@ use anyhow::{Context, Result, anyhow, bail};
 use tokio::sync::{Barrier, mpsc, watch};
 use tokio::time::{sleep, timeout};
 
-use super::diagnostics::ResourceSnapshot;
+use super::diagnostics::{ResourceSnapshot, ViewCacheCounters};
 use super::fake_agent::{
     SeededHistoryRange, run_fake_agent, seed_history_points, wait_for_final_snapshots,
     wait_for_seeded_history_points,
 };
 use super::probes::{
     BodySizeSummary, HttpProbeSample, probe_dashboard_refreshes, probe_metrics, probe_node_history,
-    probe_nodes, probe_overview, summarize_probe_samples,
+    probe_nodes, probe_nodes_until, probe_overview, probe_overview_until, summarize_probe_samples,
 };
 use super::server::TestServer;
 use super::{AgentCredential, AgentWorkload};
@@ -35,6 +35,13 @@ const PAYLOAD_NODE_COUNT: usize = 500;
 const PAYLOAD_DISK_ENTRIES: usize = 64;
 const PAYLOAD_METRICS_PER_NODE: u64 = 4;
 const PROMETHEUS_SCRAPE_SAMPLES: usize = 8;
+const CONCURRENT_NODE_COUNT: usize = 1000;
+const CONCURRENT_OVERVIEW_READERS: usize = 20;
+const CONCURRENT_NODES_READERS: usize = 10;
+const CONCURRENT_METRICS_PER_NODE: u64 = 200;
+const CONCURRENT_INTER_MESSAGE_MS: u64 = 50;
+const CONCURRENT_PROBE_DURATION_SECS: u64 = 8;
+const CONCURRENT_PROBE_DELAY_MS: u64 = 20;
 
 #[derive(Debug)]
 struct WorkloadRun {
@@ -75,7 +82,7 @@ pub(super) async fn run_large_fleet_load_test() -> Result<()> {
         let metrics = summarize_probe_samples(&join_probe_task(metrics_task, "metrics").await?)?;
         let resources = ResourceSnapshot::capture(&server).await?;
         println!(
-            "LARGE_FLEET_RESULT nodes={} connect_ms={:.1} settle_ms={:.1} metrics_total={} metrics_per_sec={:.1} overview_p95_ms={:.2} nodes_p95_ms={:.2} metrics_p95_ms={:.2} overview_body_bytes={} nodes_body_bytes={} metrics_body_bytes={} rss_bytes={} history_queue_depth={} history_dropped_writes={} db_bytes={} wal_bytes={} shm_bytes={}",
+            "LARGE_FLEET_RESULT nodes={} connect_ms={:.1} settle_ms={:.1} metrics_total={} metrics_per_sec={:.1} overview_p95_ms={:.2} nodes_p95_ms={:.2} metrics_p95_ms={:.2} overview_body_bytes={} nodes_body_bytes={} metrics_body_bytes={} rss_bytes={} history_queue_depth={} history_dropped_writes={} db_bytes={} wal_bytes={} shm_bytes={} {}",
             node_count,
             run.connect_ms,
             run.settle_ms,
@@ -93,6 +100,7 @@ pub(super) async fn run_large_fleet_load_test() -> Result<()> {
             resources.history_artifacts.db,
             resources.history_artifacts.wal,
             resources.history_artifacts.shm,
+            view_cache_summary(resources.view_cache),
         );
         server.shutdown().await?;
     }
@@ -145,7 +153,7 @@ pub(super) async fn run_dashboard_fanout_load_test() -> Result<()> {
     let metrics = summarize_probe_samples(&join_probe_task(metrics_task, "metrics").await?)?;
     let resources = ResourceSnapshot::capture(&server).await?;
     println!(
-        "DASHBOARD_FANOUT_RESULT nodes={} dashboard_readers={} refreshes_total={} connect_ms={:.1} settle_ms={:.1} metrics_total={} metrics_per_sec={:.1} overview_p95_ms={:.2} nodes_p95_ms={:.2} metrics_p95_ms={:.2} overview_body_bytes={} nodes_body_bytes={} metrics_body_bytes={} rss_bytes={} history_queue_depth={} history_dropped_writes={} db_bytes={} wal_bytes={} shm_bytes={}",
+        "DASHBOARD_FANOUT_RESULT nodes={} dashboard_readers={} refreshes_total={} connect_ms={:.1} settle_ms={:.1} metrics_total={} metrics_per_sec={:.1} overview_p95_ms={:.2} nodes_p95_ms={:.2} metrics_p95_ms={:.2} overview_body_bytes={} nodes_body_bytes={} metrics_body_bytes={} rss_bytes={} history_queue_depth={} history_dropped_writes={} db_bytes={} wal_bytes={} shm_bytes={} {}",
         DASHBOARD_NODE_COUNT,
         DASHBOARD_READERS,
         DASHBOARD_READERS * DASHBOARD_REFRESHES_PER_READER,
@@ -165,6 +173,7 @@ pub(super) async fn run_dashboard_fanout_load_test() -> Result<()> {
         resources.history_artifacts.db,
         resources.history_artifacts.wal,
         resources.history_artifacts.shm,
+        view_cache_summary(resources.view_cache),
     );
     server.shutdown().await?;
     Ok(())
@@ -209,7 +218,7 @@ pub(super) async fn run_history_pressure_load_test() -> Result<()> {
     let history = summarize_probe_samples(&history_samples)?;
     let resources = ResourceSnapshot::capture(&server).await?;
     println!(
-        "HISTORY_PRESSURE_RESULT nodes={} history_readers={} history_points_per_node={} connect_ms={:.1} settle_ms={:.1} metrics_total={} metrics_per_sec={:.1} history_p95_ms={:.2} history_body_bytes={} rss_bytes={} history_queue_depth={} history_dropped_writes={} db_bytes={} wal_bytes={} shm_bytes={}",
+        "HISTORY_PRESSURE_RESULT nodes={} history_readers={} history_points_per_node={} connect_ms={:.1} settle_ms={:.1} metrics_total={} metrics_per_sec={:.1} history_p95_ms={:.2} history_body_bytes={} rss_bytes={} history_queue_depth={} history_dropped_writes={} db_bytes={} wal_bytes={} shm_bytes={} {}",
         HISTORY_NODE_COUNT,
         HISTORY_READERS,
         HISTORY_POINTS_PER_NODE,
@@ -225,6 +234,7 @@ pub(super) async fn run_history_pressure_load_test() -> Result<()> {
         resources.history_artifacts.db,
         resources.history_artifacts.wal,
         resources.history_artifacts.shm,
+        view_cache_summary(resources.view_cache),
     );
     server.shutdown().await?;
     Ok(())
@@ -254,7 +264,7 @@ pub(super) async fn run_payload_size_load_test() -> Result<()> {
     let metrics = summarize_probe_samples(&join_probe_task(metrics_task, "metrics").await?)?;
     let resources = ResourceSnapshot::capture(&server).await?;
     println!(
-        "PAYLOAD_SIZE_RESULT nodes={} disk_entries_per_node={} connect_ms={:.1} settle_ms={:.1} metrics_total={} metrics_per_sec={:.1} nodes_p95_ms={:.2} metrics_p95_ms={:.2} nodes_body_bytes={} metrics_body_bytes={} rss_bytes={} history_queue_depth={} history_dropped_writes={} db_bytes={} wal_bytes={} shm_bytes={}",
+        "PAYLOAD_SIZE_RESULT nodes={} disk_entries_per_node={} connect_ms={:.1} settle_ms={:.1} metrics_total={} metrics_per_sec={:.1} nodes_p95_ms={:.2} metrics_p95_ms={:.2} nodes_body_bytes={} metrics_body_bytes={} rss_bytes={} history_queue_depth={} history_dropped_writes={} db_bytes={} wal_bytes={} shm_bytes={} {}",
         PAYLOAD_NODE_COUNT,
         PAYLOAD_DISK_ENTRIES,
         run.connect_ms,
@@ -271,6 +281,110 @@ pub(super) async fn run_payload_size_load_test() -> Result<()> {
         resources.history_artifacts.db,
         resources.history_artifacts.wal,
         resources.history_artifacts.shm,
+        view_cache_summary(resources.view_cache),
+    );
+    server.shutdown().await?;
+    Ok(())
+}
+
+pub(super) async fn run_concurrent_read_write_load_test() -> Result<()> {
+    let (server, credentials) = TestServer::start(CONCURRENT_NODE_COUNT).await?;
+    println!(
+        "CONCURRENT_RW_TEST starting nodes={} overview_readers={} nodes_readers={} metrics_per_node={} inter_message_ms={} probe_duration_s={}",
+        CONCURRENT_NODE_COUNT,
+        CONCURRENT_OVERVIEW_READERS,
+        CONCURRENT_NODES_READERS,
+        CONCURRENT_METRICS_PER_NODE,
+        CONCURRENT_INTER_MESSAGE_MS,
+        CONCURRENT_PROBE_DURATION_SECS,
+    );
+
+    let (ready_tx, mut ready_rx) = mpsc::unbounded_channel::<String>();
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let burst_barrier = Arc::new(Barrier::new(credentials.len() + 1));
+    let workload = AgentWorkload {
+        uptime_start: 1,
+        metrics_per_node: CONCURRENT_METRICS_PER_NODE,
+        inter_message_delay: Duration::from_millis(CONCURRENT_INTER_MESSAGE_MS),
+        hold_after_send: Duration::ZERO,
+        disk_entries: 1,
+    };
+    let mut agent_handles = Vec::with_capacity(credentials.len());
+    for credential in credentials.iter().cloned() {
+        agent_handles.push(tokio::spawn(run_fake_agent(
+            server.addr,
+            credential,
+            workload,
+            ready_tx.clone(),
+            Arc::clone(&burst_barrier),
+            stop_rx.clone(),
+        )));
+    }
+    drop(ready_tx);
+
+    wait_for_ready_nodes(&mut ready_rx, credentials.len(), "concurrent fake agents").await?;
+
+    let probe_started = Instant::now();
+    let deadline = probe_started + Duration::from_secs(CONCURRENT_PROBE_DURATION_SECS);
+    let mut overview_reader_tasks = Vec::with_capacity(CONCURRENT_OVERVIEW_READERS);
+    for _ in 0..CONCURRENT_OVERVIEW_READERS {
+        overview_reader_tasks.push(tokio::spawn(probe_overview_until(
+            server.addr,
+            deadline,
+            Duration::from_millis(CONCURRENT_PROBE_DELAY_MS),
+        )));
+    }
+    let mut nodes_reader_tasks = Vec::with_capacity(CONCURRENT_NODES_READERS);
+    for _ in 0..CONCURRENT_NODES_READERS {
+        nodes_reader_tasks.push(tokio::spawn(probe_nodes_until(
+            server.addr,
+            deadline,
+            Duration::from_millis(CONCURRENT_PROBE_DELAY_MS),
+            CONCURRENT_NODE_COUNT,
+        )));
+    }
+
+    burst_barrier.wait().await;
+
+    let mut overview_samples = Vec::new();
+    for task in overview_reader_tasks {
+        overview_samples.extend(join_probe_task(task, "concurrent overview").await?);
+    }
+    let mut nodes_samples = Vec::new();
+    for task in nodes_reader_tasks {
+        nodes_samples.extend(join_probe_task(task, "concurrent nodes").await?);
+    }
+    let probe_elapsed = probe_started.elapsed();
+
+    let overview = summarize_probe_samples(&overview_samples)?;
+    let nodes = summarize_probe_samples(&nodes_samples)?;
+    let resources = ResourceSnapshot::capture(&server).await?;
+
+    let _ = stop_tx.send(true);
+    for handle in agent_handles {
+        handle
+            .await
+            .map_err(|error| anyhow!("join concurrent fake agent task: {error}"))??;
+    }
+
+    println!(
+        "CONCURRENT_RW_RESULT nodes={} overview_readers={} nodes_readers={} probe_elapsed_ms={:.1} overview_samples={} nodes_samples={} overview_p50_ms={:.2} overview_p95_ms={:.2} overview_max_ms={:.2} nodes_p50_ms={:.2} nodes_p95_ms={:.2} nodes_max_ms={:.2} overview_body_bytes={} nodes_body_bytes={} rss_bytes={} {}",
+        CONCURRENT_NODE_COUNT,
+        CONCURRENT_OVERVIEW_READERS,
+        CONCURRENT_NODES_READERS,
+        probe_elapsed.as_secs_f64() * 1000.0,
+        overview_samples.len(),
+        nodes_samples.len(),
+        overview.latency.p50_ms,
+        overview.latency.p95_ms,
+        overview.latency.max_ms,
+        nodes.latency.p50_ms,
+        nodes.latency.p95_ms,
+        nodes.latency.max_ms,
+        body_bytes_triplet(overview.body_bytes),
+        body_bytes_triplet(nodes.body_bytes),
+        resources.rss_bytes,
+        view_cache_summary(resources.view_cache),
     );
     server.shutdown().await?;
     Ok(())
@@ -278,6 +392,18 @@ pub(super) async fn run_payload_size_load_test() -> Result<()> {
 
 fn body_bytes_triplet(summary: BodySizeSummary) -> String {
     format!("{}/{}/{}", summary.p50, summary.p95, summary.max)
+}
+
+fn view_cache_summary(counters: ViewCacheCounters) -> String {
+    format!(
+        "overview_hits={} overview_misses={} nodes_hits={} nodes_misses={} metrics_hits={} metrics_misses={}",
+        counters.overview_hits,
+        counters.overview_misses,
+        counters.nodes_hits,
+        counters.nodes_misses,
+        counters.metrics_hits,
+        counters.metrics_misses,
+    )
 }
 
 async fn drive_agent_workload(

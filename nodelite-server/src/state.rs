@@ -28,7 +28,18 @@ pub(crate) use self::session_control::{
     SessionCommand, SessionCommandError, SessionControlHandle, SessionRefreshReply,
 };
 use self::sqlite_wal::SqliteWalCheckpointObserver;
-use self::view_cache::{ApiBodyKind, ReadinessSnapshot, ViewCache};
+use self::view_cache::{JsonViewSlot, MetricsViewSlot, ReadinessSnapshot};
+
+#[derive(Debug, Clone, Copy)]
+enum ApiBodyKind {
+    Nodes,
+    Overview,
+}
+
+/// Overview 聚合允许的最大"陈旧时间":即使 overview revision 没有递增,
+/// 缓存超过这个时长后也会强制重建。配合后续 commit 把 snapshot/latency
+/// 的 revision 影响范围收窄到 nodes,避免聚合数据无限期不刷新。
+const OVERVIEW_CACHE_MAX_STALE: Duration = Duration::from_secs(1);
 use crate::ServerReadiness;
 use crate::handlers::metrics_exporter::{
     ApiCacheMetrics, SqliteWalCheckpointMetrics, WsMessageMetrics, render_prometheus_metrics,
@@ -40,8 +51,12 @@ pub struct SharedState {
     config: Arc<ServerConfig>,
     registry: Arc<RwLock<Registry>>,
     next_session_id: Arc<AtomicU64>,
-    view_revision: Arc<AtomicU64>,
-    view_cache: Arc<Mutex<ViewCache>>,
+    overview_revision: Arc<AtomicU64>,
+    nodes_revision: Arc<AtomicU64>,
+    metrics_revision: Arc<AtomicU64>,
+    overview_cache: Arc<Mutex<JsonViewSlot>>,
+    nodes_cache: Arc<Mutex<JsonViewSlot>>,
+    metrics_cache: Arc<Mutex<MetricsViewSlot>>,
     api_nodes_cache_build_lock: Arc<Mutex<()>>,
     api_overview_cache_build_lock: Arc<Mutex<()>>,
     metrics_cache_build_lock: Arc<Mutex<()>>,
@@ -70,8 +85,12 @@ impl SharedState {
             config: Arc::clone(&config),
             registry: Arc::new(RwLock::new(Registry::default())),
             next_session_id: Arc::new(AtomicU64::new(1)),
-            view_revision: Arc::new(AtomicU64::new(1)),
-            view_cache: Arc::new(Mutex::new(ViewCache::default())),
+            overview_revision: Arc::new(AtomicU64::new(1)),
+            nodes_revision: Arc::new(AtomicU64::new(1)),
+            metrics_revision: Arc::new(AtomicU64::new(1)),
+            overview_cache: Arc::new(Mutex::new(JsonViewSlot::default())),
+            nodes_cache: Arc::new(Mutex::new(JsonViewSlot::default())),
+            metrics_cache: Arc::new(Mutex::new(MetricsViewSlot::default())),
             api_nodes_cache_build_lock: Arc::new(Mutex::new(())),
             api_overview_cache_build_lock: Arc::new(Mutex::new(())),
             metrics_cache_build_lock: Arc::new(Mutex::new(())),
@@ -99,8 +118,8 @@ impl SharedState {
         self.config.as_ref()
     }
 
-    pub(crate) fn view_revision(&self) -> u64 {
-        self.view_revision.load(Ordering::Acquire)
+    pub(crate) fn nodes_revision(&self) -> u64 {
+        self.nodes_revision.load(Ordering::Acquire)
     }
 
     /// 登记一个新的 WebSocket 会话并返回唯一的 `session_id`。
@@ -115,6 +134,10 @@ impl SharedState {
     }
 
     /// 更新某节点的最新快照。若该会话已被新会话替代,则返回 `None` 告知调用方丢弃。
+    ///
+    /// 注意:只 bump nodes_revision。overview / metrics 视图通过各自的 TTL
+    /// 容忍最多几秒的聚合数据滞后,以便高频上报场景下不再连带使三视图缓存
+    /// 同时失效。
     pub async fn update_snapshot(
         &self,
         node_id: &str,
@@ -124,17 +147,17 @@ impl SharedState {
         let mut registry = self.registry.write().await;
         let status = registry.update_snapshot(node_id, session_id, snapshot, Utc::now());
         if status.is_some() {
-            self.bump_view_revision();
+            self.bump_nodes_revision_only();
         }
         status
     }
 
-    /// 更新某节点的最新延迟值,语义同 `update_snapshot`。
+    /// 更新某节点的最新延迟值,语义同 `update_snapshot`(只 bump nodes_revision)。
     pub async fn update_latency(&self, node_id: &str, session_id: u64, latency_ms: u64) -> bool {
         let mut registry = self.registry.write().await;
         let updated = registry.update_latency(node_id, session_id, latency_ms, Utc::now());
         if updated {
-            self.bump_view_revision();
+            self.bump_nodes_revision_only();
         }
         updated
     }
@@ -284,24 +307,24 @@ impl SharedState {
     /// 返回缓存后的 `/metrics` 响应体。
     /// 缓存键由节点视图 revision、服务 readiness 摘要与最大存活时间共同决定。
     pub async fn metrics_text(&self, readiness: &ServerReadiness) -> Bytes {
-        let revision = self.view_revision.load(Ordering::Acquire);
+        let revision = self.metrics_revision.load(Ordering::Acquire);
         let readiness_snapshot = ReadinessSnapshot::capture(readiness);
         let max_age = Duration::from_secs(self.config.refresh_interval_secs.max(1));
 
         {
-            let cache = self.view_cache.lock().await;
-            if let Some(body) = cache.metrics_body(revision, readiness_snapshot, max_age) {
+            let cache = self.metrics_cache.lock().await;
+            if let Some(body) = cache.get(revision, readiness_snapshot, max_age) {
                 self.record_metrics_cache_hit();
                 return body;
             }
         }
 
         let _build_guard = self.metrics_cache_build_lock.lock().await;
-        let revision = self.view_revision.load(Ordering::Acquire);
+        let revision = self.metrics_revision.load(Ordering::Acquire);
         let readiness_snapshot = ReadinessSnapshot::capture(readiness);
         {
-            let cache = self.view_cache.lock().await;
-            if let Some(body) = cache.metrics_body(revision, readiness_snapshot, max_age) {
+            let cache = self.metrics_cache.lock().await;
+            if let Some(body) = cache.get(revision, readiness_snapshot, max_age) {
                 self.record_metrics_cache_hit();
                 return body;
             }
@@ -317,9 +340,9 @@ impl SharedState {
         self.metrics_body_bytes
             .store(body.len() as u64, Ordering::Relaxed);
 
-        if self.view_revision.load(Ordering::Acquire) == revision {
-            let mut cache = self.view_cache.lock().await;
-            cache.store_metrics_body(revision, readiness_snapshot, body.clone());
+        if self.metrics_revision.load(Ordering::Acquire) == revision {
+            let mut cache = self.metrics_cache.lock().await;
+            cache.store(revision, readiness_snapshot, body.clone());
         }
 
         body
@@ -345,15 +368,50 @@ impl SharedState {
         self.bump_view_revision();
     }
 
+    /// 结构性变更(注册、断连、批量恢复)同时使三视图缓存失效。
     fn bump_view_revision(&self) {
-        self.view_revision.fetch_add(1, Ordering::AcqRel);
+        self.overview_revision.fetch_add(1, Ordering::AcqRel);
+        self.nodes_revision.fetch_add(1, Ordering::AcqRel);
+        self.metrics_revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// 单节点快照 / 延迟更新只让 nodes 视图立刻失效。
+    ///
+    /// overview 与 metrics 通过 TTL 容忍短期陈旧,从而避免高频 push 把三视图
+    /// 缓存连带打穿(见 issue #160)。
+    fn bump_nodes_revision_only(&self) {
+        self.nodes_revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn json_slot_for(&self, kind: ApiBodyKind) -> &Arc<Mutex<JsonViewSlot>> {
+        match kind {
+            ApiBodyKind::Nodes => &self.nodes_cache,
+            ApiBodyKind::Overview => &self.overview_cache,
+        }
+    }
+
+    fn revision_atomic_for(&self, kind: ApiBodyKind) -> &AtomicU64 {
+        match kind {
+            ApiBodyKind::Nodes => &self.nodes_revision,
+            ApiBodyKind::Overview => &self.overview_revision,
+        }
+    }
+
+    fn max_age_for(&self, kind: ApiBodyKind) -> Option<Duration> {
+        match kind {
+            ApiBodyKind::Nodes => None,
+            ApiBodyKind::Overview => Some(OVERVIEW_CACHE_MAX_STALE),
+        }
     }
 
     async fn cached_api_json_bytes(&self, kind: ApiBodyKind) -> Result<Bytes, serde_json::Error> {
-        let revision = self.view_revision.load(Ordering::Acquire);
+        let slot = self.json_slot_for(kind);
+        let revision_atomic = self.revision_atomic_for(kind);
+        let max_age = self.max_age_for(kind);
+        let revision = revision_atomic.load(Ordering::Acquire);
         {
-            let cache = self.view_cache.lock().await;
-            if let Some(body) = cache.api_body(revision, kind) {
+            let cache = slot.lock().await;
+            if let Some(body) = cache.get(revision, max_age) {
                 self.record_api_cache_hit(kind);
                 return Ok(body);
             }
@@ -364,10 +422,10 @@ impl SharedState {
             ApiBodyKind::Overview => &self.api_overview_cache_build_lock,
         };
         let _build_guard = build_lock.lock().await;
-        let revision = self.view_revision.load(Ordering::Acquire);
+        let revision = revision_atomic.load(Ordering::Acquire);
         {
-            let cache = self.view_cache.lock().await;
-            if let Some(body) = cache.api_body(revision, kind) {
+            let cache = slot.lock().await;
+            if let Some(body) = cache.get(revision, max_age) {
                 self.record_api_cache_hit(kind);
                 return Ok(body);
             }
@@ -387,9 +445,9 @@ impl SharedState {
         };
         self.record_api_body_bytes(kind, body.len());
 
-        if self.view_revision.load(Ordering::Acquire) == revision {
-            let mut cache = self.view_cache.lock().await;
-            cache.store_api_body(revision, kind, body.clone());
+        if revision_atomic.load(Ordering::Acquire) == revision {
+            let mut cache = slot.lock().await;
+            cache.store(revision, body.clone());
         }
 
         Ok(body)
@@ -781,6 +839,56 @@ mod tests {
         );
 
         assert_eq!(shared.registry_disk_entries_total().await, 5);
+    }
+
+    #[tokio::test]
+    async fn snapshot_update_only_invalidates_nodes_view() {
+        let shared = SharedState::new(Arc::new(sample_config()));
+        let readiness = crate::ServerReadiness::new(true);
+        let session_id = shared
+            .register_node(sample_identity(), Some("198.51.100.10".to_string()))
+            .await;
+
+        // Prime每个视图各一次。
+        let _ = shared.overview_json_bytes().await.expect("overview json");
+        let _ = shared.nodes_json_bytes().await.expect("nodes json");
+        let _ = shared.metrics_text(&readiness).await;
+        assert_eq!(shared.api_overview_cache_build_count(), 1);
+        assert_eq!(shared.api_nodes_cache_build_count(), 1);
+        assert_eq!(shared.metrics_cache_build_count(), 1);
+
+        // 单纯的 snapshot 更新只让 nodes 视图失效;overview/metrics 仍命中缓存。
+        assert!(
+            shared
+                .update_snapshot("hk-01", session_id, sample_snapshot(Utc::now()))
+                .await
+                .is_some()
+        );
+        let _ = shared.overview_json_bytes().await.expect("overview cached");
+        let _ = shared.metrics_text(&readiness).await;
+        assert_eq!(shared.api_overview_cache_build_count(), 1);
+        assert_eq!(shared.metrics_cache_build_count(), 1);
+
+        let _ = shared.nodes_json_bytes().await.expect("nodes rebuilds");
+        assert_eq!(shared.api_nodes_cache_build_count(), 2);
+
+        // latency 更新同样只触达 nodes。
+        assert!(shared.update_latency("hk-01", session_id, 42).await);
+        let _ = shared.overview_json_bytes().await.expect("overview cached");
+        let _ = shared.metrics_text(&readiness).await;
+        assert_eq!(shared.api_overview_cache_build_count(), 1);
+        assert_eq!(shared.metrics_cache_build_count(), 1);
+        let _ = shared.nodes_json_bytes().await.expect("nodes rebuilds again");
+        assert_eq!(shared.api_nodes_cache_build_count(), 3);
+
+        // 真正的结构性变更仍然连带使三视图失效。
+        shared.mark_disconnected("hk-01", session_id).await;
+        let _ = shared.overview_json_bytes().await.expect("overview rebuilds");
+        let _ = shared.metrics_text(&readiness).await;
+        let _ = shared.nodes_json_bytes().await.expect("nodes rebuilds");
+        assert_eq!(shared.api_overview_cache_build_count(), 2);
+        assert_eq!(shared.metrics_cache_build_count(), 2);
+        assert_eq!(shared.api_nodes_cache_build_count(), 4);
     }
 
     #[tokio::test]
