@@ -103,9 +103,9 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
 
 如果你对 Agent 的长期常驻内存敏感，建议在自己的环境中持续观察 RSS 变化并预留余量。
 
-### 2026-05-24 release 压测基线
+### v2.2.6 Release 压测基线
 
-下面这组数据来自 2026-05-24 在同一台机器上对当前版本连续执行 `3` 次仓库内置 loopback 压测后得到的均值，使用 release 构建直接实测：
+下面这组数据来自 `v2.2.6` 在同一台机器上对当前版本连续执行 `3` 次仓库内置 loopback 压测后得到的均值，使用 release 构建直接实测：
 
 ```bash
 cargo test -p nodelite-server --release load_test_scaling_scores -- --ignored --nocapture
@@ -117,14 +117,22 @@ cargo test -p nodelite-server --release load_test_reconnect_storm_scores -- --ig
 
 这组基线走的是真实 WebSocket 建链、真实 `metrics` 上报和真实只读 API 轮询，但仍然是单机 loopback，不包含反向代理、TLS 终结和跨机网络抖动。
 
+相较 README 中上一版 `v2.2.5` 基线，本版本当前样本可见的改进包括：
+
+- `1000` 节点 dashboard fanout 场景下，`/api/nodes` 响应体从 `968995 B` 降到 `285001 B`，约缩小 `70.6%`。
+- `1000` 节点 dashboard fanout 场景下，`/api/nodes` p95 从 `12.61 ms` 降到 `3.51 ms`，约下降 `72.2%`。
+- `1000` 节点 dashboard fanout 场景下，`/metrics` p95 从 `20.22 ms` 降到 `7.29 ms`，约下降 `64.0%`。
+- `1000` 节点 history pressure 场景下，`history` p95 从 `70.90 ms` 降到 `33.86 ms`，约下降 `52.2%`。
+- `500` 节点 `64` disk entry 场景下，`/metrics` 响应体从 `3146308 B` 降到 `637182 B`，约缩小 `79.7%`。
+
 #### 吞吐与总览延迟
 
 | 节点数 | 全部接入耗时 | 收敛耗时 | 总 metrics 数 | metrics 吞吐 | overview p50 | overview p95 | overview max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 20 | 167.2 ms | 21.8 ms | 240 | 11033.9/s | 0.50 ms | 0.60 ms | 1.14 ms |
-| 50 | 415.0 ms | 22.2 ms | 600 | 27091.9/s | 0.49 ms | 0.62 ms | 1.45 ms |
-| 100 | 823.1 ms | 21.9 ms | 1200 | 54880.1/s | 0.48 ms | 0.60 ms | 3.30 ms |
-| 200 | 1682.6 ms | 22.4 ms | 2400 | 107111.3/s | 0.49 ms | 1.52 ms | 5.53 ms |
+| 20 | 186.5 ms | 22.3 ms | 240 | 10761.2/s | 0.45 ms | 0.62 ms | 0.83 ms |
+| 50 | 456.6 ms | 21.7 ms | 600 | 27671.0/s | 0.46 ms | 0.87 ms | 2.72 ms |
+| 100 | 1131.8 ms | 22.5 ms | 1200 | 53484.1/s | 0.58 ms | 1.42 ms | 5.01 ms |
+| 200 | 2269.4 ms | 36.5 ms | 2400 | 72864.0/s | 0.54 ms | 5.30 ms | 12.55 ms |
 
 #### 200 节点读接口延迟
 
@@ -132,20 +140,20 @@ cargo test -p nodelite-server --release load_test_reconnect_storm_scores -- --ig
 
 | 接口 | p50 | p95 | max |
 | --- | ---: | ---: | ---: |
-| `/api/overview` | 0.52 ms | 2.75 ms | 6.58 ms |
-| `/api/nodes` | 1.15 ms | 2.83 ms | 3.80 ms |
-| `/api/nodes/{node_id}` | 0.54 ms | 2.87 ms | 3.19 ms |
-| `/api/nodes/{node_id}/history` | 1.58 ms | 4.09 ms | 5.72 ms |
+| `/api/overview` | 0.66 ms | 2.72 ms | 6.54 ms |
+| `/api/nodes` | 0.67 ms | 2.93 ms | 3.48 ms |
+| `/api/nodes/{node_id}` | 0.66 ms | 2.98 ms | 3.21 ms |
+| `/api/nodes/{node_id}/history` | 1.59 ms | 3.54 ms | 4.99 ms |
 
 #### 200 节点重连风暴
 
 `load_test_reconnect_storm_scores` 会把 `200` 个节点连续拉起和断开 `4` 轮，共计 `800` 次会话建立。下面这些数值也使用 `3` 次重复执行后的均值：
 
-- **批量接入 p95**：1659.81 ms
-- **最后一轮指标恢复 p95**：66.23 ms
-- **批量断开完成 p95**：23.34 ms
-- **风暴期间 `/api/overview` p95**：2.89 ms
-- **风暴期间 `/api/nodes` p95**：3.17 ms
+- **批量接入 p95**：1822.13 ms
+- **最后一轮指标恢复 p95**：74.66 ms
+- **批量断开完成 p95**：22.84 ms
+- **风暴期间 `/api/overview` p95**：2.56 ms
+- **风暴期间 `/api/nodes` p95**：3.12 ms
 
 说明：
 
@@ -178,11 +186,11 @@ cargo test -p nodelite-server --release load_test_payload_size_scores -- --ignor
 
 | 场景 | 关键规模 | metrics 吞吐 | 关键 p95 | 响应体大小 | RSS | history dropped writes |
 | --- | --- | ---: | --- | --- | ---: | ---: |
-| `load_test_large_fleet_scores` | `500` 节点 | `56606.4/s` | `overview 1.03 ms` / `nodes 2.35 ms` / `metrics 5.05 ms` | `overview 257 B` / `nodes 484501 B` / `metrics 722807 B` | `194.0 MiB` | `0` |
-| `load_test_large_fleet_scores` | `1000` 节点 | `82519.7/s` | `overview 1.02 ms` / `nodes 5.74 ms` / `metrics 10.66 ms` | `overview 261 B` / `nodes 968995 B` / `metrics 1435821 B` | `332.7 MiB` | `0` |
-| `load_test_dashboard_fanout_scores` | `1000` 节点 + `20` readers | `86045.9/s` | `overview 2.99 ms` / `nodes 12.61 ms` / `metrics 20.22 ms` | `overview 261 B` / `nodes 968995 B` / `metrics 1435821 B` | `338.8 MiB` | `0` |
-| `load_test_history_pressure_scores` | `1000` 节点 + `20` history readers | `89301.6/s` | `history 70.90 ms` | `history 50823 B` | `336.2 MiB` | `0` |
-| `load_test_payload_size_scores` | `500` 节点 + `64` disk entries | `16618.4/s` | `nodes 7.49 ms` / `metrics 14.56 ms` | `nodes 2602492 B` / `metrics 3146308 B` | `239.5 MiB` | `0` |
+| `load_test_large_fleet_scores` | `500` 节点 | `68678.5/s` | `overview 1.18 ms` / `nodes 1.67 ms` / `metrics 7.55 ms` | `overview 257 B` / `nodes 142501 B` / `metrics 637186 B` | `194.8 MiB` | `0` |
+| `load_test_large_fleet_scores` | `1000` 节点 | `89675.3/s` | `overview 1.56 ms` / `nodes 4.08 ms` / `metrics 18.54 ms` | `overview 261 B` / `nodes 285001 B` / `metrics 1264700 B` | `335.7 MiB` | `0` |
+| `load_test_dashboard_fanout_scores` | `1000` 节点 + `20` readers | `88934.8/s` | `overview 2.08 ms` / `nodes 3.51 ms` / `metrics 7.29 ms` | `overview 261 B` / `nodes 285001 B` / `metrics 1264700 B` | `337.9 MiB` | `0` |
+| `load_test_history_pressure_scores` | `1000` 节点 + `20` history readers | `90773.1/s` | `history 33.86 ms` | `history 50823 B` | `334.6 MiB` | `0` |
+| `load_test_payload_size_scores` | `500` 节点 + `64` disk entries | `43559.1/s` | `nodes 1.55 ms` / `metrics 14.81 ms` | `nodes 142501 B` / `metrics 637182 B` | `222.8 MiB` | `0` |
 
 首页 DOM 渲染压力可以用真实 `nodelite-server/assets/index.html` 生成自包含 fixture：
 

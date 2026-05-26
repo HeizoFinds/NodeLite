@@ -103,9 +103,9 @@ These are observations, not hard limits. The current Agent resident memory incre
 
 If you are sensitive to Agent long-term resident memory, monitor RSS changes in your own environment and leave headroom.
 
-### 2026-05-24 Release Benchmark Baseline
+### v2.2.6 Release Benchmark Baseline
 
-The following data was obtained on 2026-05-24 by running the built-in loopback benchmark `3` times on the same machine and averaging the results, using a release build:
+The following data was obtained for `v2.2.6` by running the built-in loopback benchmark `3` times on the same machine and averaging the results, using a release build:
 
 ```bash
 cargo test -p nodelite-server --release load_test_scaling_scores -- --ignored --nocapture
@@ -117,14 +117,22 @@ Test machine: `Apple M1 Pro / 32 GB / macOS 26.5`
 
 This baseline uses real WebSocket connections, real `metrics` reporting, and real read-only API polling, but is still single-machine loopback — it does not include reverse proxy, TLS termination, or cross-machine network jitter.
 
+Compared with the previous `v2.2.5` baseline recorded in the README, the current sample shows:
+
+- In the `1000`-node dashboard fanout scenario, `/api/nodes` response body dropped from `968995 B` to `285001 B`, about `70.6%` smaller.
+- In the `1000`-node dashboard fanout scenario, `/api/nodes` p95 dropped from `12.61 ms` to `3.51 ms`, about `72.2%` lower.
+- In the `1000`-node dashboard fanout scenario, `/metrics` p95 dropped from `20.22 ms` to `7.29 ms`, about `64.0%` lower.
+- In the `1000`-node history pressure scenario, `history` p95 dropped from `70.90 ms` to `33.86 ms`, about `52.2%` lower.
+- In the `500`-node `64`-disk-entry scenario, `/metrics` response body dropped from `3146308 B` to `637182 B`, about `79.7%` smaller.
+
 #### Throughput & Overview Latency
 
 | Nodes | Connection Time | Settle Time | Total Metrics | Metrics Throughput | overview p50 | overview p95 | overview max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 20 | 167.2 ms | 21.8 ms | 240 | 11033.9/s | 0.50 ms | 0.60 ms | 1.14 ms |
-| 50 | 415.0 ms | 22.2 ms | 600 | 27091.9/s | 0.49 ms | 0.62 ms | 1.45 ms |
-| 100 | 823.1 ms | 21.9 ms | 1200 | 54880.1/s | 0.48 ms | 0.60 ms | 3.30 ms |
-| 200 | 1682.6 ms | 22.4 ms | 2400 | 107111.3/s | 0.49 ms | 1.52 ms | 5.53 ms |
+| 20 | 186.5 ms | 22.3 ms | 240 | 10761.2/s | 0.45 ms | 0.62 ms | 0.83 ms |
+| 50 | 456.6 ms | 21.7 ms | 600 | 27671.0/s | 0.46 ms | 0.87 ms | 2.72 ms |
+| 100 | 1131.8 ms | 22.5 ms | 1200 | 53484.1/s | 0.58 ms | 1.42 ms | 5.01 ms |
+| 200 | 2269.4 ms | 36.5 ms | 2400 | 72864.0/s | 0.54 ms | 5.30 ms | 12.55 ms |
 
 #### 200-Node Read API Latency
 
@@ -132,20 +140,20 @@ This baseline uses real WebSocket connections, real `metrics` reporting, and rea
 
 | Endpoint | p50 | p95 | max |
 | --- | ---: | ---: | ---: |
-| `/api/overview` | 0.52 ms | 2.75 ms | 6.58 ms |
-| `/api/nodes` | 1.15 ms | 2.83 ms | 3.80 ms |
-| `/api/nodes/{node_id}` | 0.54 ms | 2.87 ms | 3.19 ms |
-| `/api/nodes/{node_id}/history` | 1.58 ms | 4.09 ms | 5.72 ms |
+| `/api/overview` | 0.66 ms | 2.72 ms | 6.54 ms |
+| `/api/nodes` | 0.67 ms | 2.93 ms | 3.48 ms |
+| `/api/nodes/{node_id}` | 0.66 ms | 2.98 ms | 3.21 ms |
+| `/api/nodes/{node_id}/history` | 1.59 ms | 3.54 ms | 4.99 ms |
 
 #### 200-Node Reconnect Storm
 
 `load_test_reconnect_storm_scores` connects and disconnects `200` nodes repeatedly for `4` cycles, totaling `800` session establishments. The values below are also averaged over `3` repeated runs:
 
-- **Batch connect p95**: 1659.81 ms
-- **Last-cycle metric recovery p95**: 66.23 ms
-- **Batch disconnect p95**: 23.34 ms
-- **Storm `/api/overview` p95**: 2.89 ms
-- **Storm `/api/nodes` p95**: 3.17 ms
+- **Batch connect p95**: 1822.13 ms
+- **Last-cycle metric recovery p95**: 74.66 ms
+- **Batch disconnect p95**: 22.84 ms
+- **Storm `/api/overview` p95**: 2.56 ms
+- **Storm `/api/nodes` p95**: 3.12 ms
 
 Notes:
 
@@ -178,11 +186,11 @@ The table below is a single-run sample on the same machine, showing approximate 
 
 | Scenario | Key Scale | Metrics Throughput | Key p95 | Response Body Size | RSS | History Dropped Writes |
 | --- | --- | ---: | --- | --- | ---: | ---: |
-| `load_test_large_fleet_scores` | `500` nodes | `56606.4/s` | `overview 1.03 ms` / `nodes 2.35 ms` / `metrics 5.05 ms` | `overview 257 B` / `nodes 484501 B` / `metrics 722807 B` | `194.0 MiB` | `0` |
-| `load_test_large_fleet_scores` | `1000` nodes | `82519.7/s` | `overview 1.02 ms` / `nodes 5.74 ms` / `metrics 10.66 ms` | `overview 261 B` / `nodes 968995 B` / `metrics 1435821 B` | `332.7 MiB` | `0` |
-| `load_test_dashboard_fanout_scores` | `1000` nodes + `20` readers | `86045.9/s` | `overview 2.99 ms` / `nodes 12.61 ms` / `metrics 20.22 ms` | `overview 261 B` / `nodes 968995 B` / `metrics 1435821 B` | `338.8 MiB` | `0` |
-| `load_test_history_pressure_scores` | `1000` nodes + `20` history readers | `89301.6/s` | `history 70.90 ms` | `history 50823 B` | `336.2 MiB` | `0` |
-| `load_test_payload_size_scores` | `500` nodes + `64` disk entries | `16618.4/s` | `nodes 7.49 ms` / `metrics 14.56 ms` | `nodes 2602492 B` / `metrics 3146308 B` | `239.5 MiB` | `0` |
+| `load_test_large_fleet_scores` | `500` nodes | `68678.5/s` | `overview 1.18 ms` / `nodes 1.67 ms` / `metrics 7.55 ms` | `overview 257 B` / `nodes 142501 B` / `metrics 637186 B` | `194.8 MiB` | `0` |
+| `load_test_large_fleet_scores` | `1000` nodes | `89675.3/s` | `overview 1.56 ms` / `nodes 4.08 ms` / `metrics 18.54 ms` | `overview 261 B` / `nodes 285001 B` / `metrics 1264700 B` | `335.7 MiB` | `0` |
+| `load_test_dashboard_fanout_scores` | `1000` nodes + `20` readers | `88934.8/s` | `overview 2.08 ms` / `nodes 3.51 ms` / `metrics 7.29 ms` | `overview 261 B` / `nodes 285001 B` / `metrics 1264700 B` | `337.9 MiB` | `0` |
+| `load_test_history_pressure_scores` | `1000` nodes + `20` history readers | `90773.1/s` | `history 33.86 ms` | `history 50823 B` | `334.6 MiB` | `0` |
+| `load_test_payload_size_scores` | `500` nodes + `64` disk entries | `43559.1/s` | `nodes 1.55 ms` / `metrics 14.81 ms` | `nodes 142501 B` / `metrics 637182 B` | `222.8 MiB` | `0` |
 
 Homepage DOM rendering pressure can be tested using the real `nodelite-server/assets/index.html` to generate self-contained fixtures:
 
