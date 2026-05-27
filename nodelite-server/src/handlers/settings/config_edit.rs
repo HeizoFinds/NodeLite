@@ -126,9 +126,8 @@ struct AlertingDocument<'a> {
 mod tests {
     use super::{update_alerting_settings, update_auth_2fa, update_auth_password};
     use nodelite_proto::{
-        AlertChannel, AlertComparator, AlertMetric, AlertRuleConfig, AlertScopeMode,
-        AlertSeverity, AlertSmtpConfig, AlertSmtpTransport, AlertWebhookConfig, AlertingConfig,
-        InspectionConfig,
+        AlertChannel, AlertComparator, AlertMetric, AlertRuleConfig, AlertScopeMode, AlertSeverity,
+        AlertSmtpConfig, AlertSmtpTransport, AlertWebhookConfig, AlertingConfig, InspectionConfig,
     };
 
     #[test]

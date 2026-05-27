@@ -1,9 +1,8 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use nodelite_proto::{
-    AlertChannel, AlertComparator, AlertMetric, AlertScopeMode, AlertSeverity,
-    AlertSmtpTransport,
+    AlertChannel, AlertComparator, AlertMetric, AlertScopeMode, AlertSeverity, AlertSmtpTransport,
 };
+use serde::{Deserialize, Serialize};
 
 /// 设置页读取的服务端与安全状态。这里刻意不包含任何 token / password 明文。
 #[derive(Debug, Serialize)]

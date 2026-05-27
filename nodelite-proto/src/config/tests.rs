@@ -3,12 +3,11 @@ use std::path::PathBuf;
 use ipnet::IpNet;
 
 use super::{
-    AlertChannel, AlertComparator, AlertMetric, AlertScopeMode, AlertSeverity,
-    AlertSmtpTransport, DEFAULT_ALERT_INSPECTION_LOCAL_TIME,
-    DEFAULT_AUDIT_RETENTION_DAYS, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_WS_AUTH_BLOCK_SECS,
-    DEFAULT_WS_AUTH_FAIL_MAX_ATTEMPTS, DEFAULT_WS_AUTH_FAIL_WINDOW_SECS,
-    DEFAULT_WS_MAX_CONNECTIONS_PER_IP, DEFAULT_WS_MAX_TOTAL_CONNECTIONS, MAX_NODE_TAG_BYTES,
-    parse_agent_config, parse_server_config,
+    AlertChannel, AlertComparator, AlertMetric, AlertScopeMode, AlertSeverity, AlertSmtpTransport,
+    DEFAULT_ALERT_INSPECTION_LOCAL_TIME, DEFAULT_AUDIT_RETENTION_DAYS, DEFAULT_MAX_MESSAGE_BYTES,
+    DEFAULT_WS_AUTH_BLOCK_SECS, DEFAULT_WS_AUTH_FAIL_MAX_ATTEMPTS,
+    DEFAULT_WS_AUTH_FAIL_WINDOW_SECS, DEFAULT_WS_MAX_CONNECTIONS_PER_IP,
+    DEFAULT_WS_MAX_TOTAL_CONNECTIONS, MAX_NODE_TAG_BYTES, parse_agent_config, parse_server_config,
 };
 
 #[test]
@@ -339,7 +338,10 @@ fn parses_server_config_with_alerting() {
         "https://hooks.example.com/nodelite"
     );
     assert_eq!(config.alerting.rules.len(), 1);
-    assert_eq!(config.alerting.rules[0].metric, AlertMetric::CpuUsagePercent);
+    assert_eq!(
+        config.alerting.rules[0].metric,
+        AlertMetric::CpuUsagePercent
+    );
     assert_eq!(config.alerting.rules[0].comparator, AlertComparator::Gt);
     assert_eq!(config.alerting.rules[0].severity, AlertSeverity::Critical);
     assert_eq!(config.alerting.rules[0].scope_mode, AlertScopeMode::Tags);

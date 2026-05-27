@@ -7,11 +7,11 @@ use super::defaults::{
     default_alert_inspection_cpu_warn_percent, default_alert_inspection_latency_warn_ms,
     default_alert_inspection_local_time, default_alert_inspection_lookback_hours,
     default_alert_inspection_memory_warn_percent, default_alert_inspection_offline_grace_minutes,
-    default_alert_rule_cooldown_minutes, default_alert_rule_window_minutes,
-    default_audit_db_path, default_audit_enabled, default_audit_log_failed_auth,
-    default_audit_log_rate_limit, default_audit_log_successful_auth,
-    default_audit_log_token_events, default_audit_retention_days, default_connect_timeout_secs,
-    default_hello_timeout_secs, default_history_db_path, default_ignored_filesystems,
+    default_alert_rule_cooldown_minutes, default_alert_rule_window_minutes, default_audit_db_path,
+    default_audit_enabled, default_audit_log_failed_auth, default_audit_log_rate_limit,
+    default_audit_log_successful_auth, default_audit_log_token_events,
+    default_audit_retention_days, default_connect_timeout_secs, default_hello_timeout_secs,
+    default_history_db_path, default_ignored_filesystems,
     default_insecure_transport_warn_interval_secs, default_max_incoming_message_bytes,
     default_max_message_bytes, default_max_outstanding_pings, default_max_sanitized_disks,
     default_max_sanitized_string_bytes, default_metric_anomaly_session_limit,
@@ -738,7 +738,8 @@ impl RawServerConfigFile {
                 )));
             }
 
-            let node_ids = normalize_node_ids(&format!("alerts.rules[{index}].node_ids"), &rule.node_ids)?;
+            let node_ids =
+                normalize_node_ids(&format!("alerts.rules[{index}].node_ids"), &rule.node_ids)?;
             let tags = normalize_tags(&format!("alerts.rules[{index}].tags"), rule.tags.clone())?;
             match rule.scope_mode {
                 AlertScopeMode::All => {}
@@ -777,7 +778,10 @@ impl RawServerConfigFile {
     }
 
     fn validate_inspection(&self) -> Result<InspectionConfig, ConfigError> {
-        validate_local_time("alerts.inspection.local_time", &self.alerts.inspection.local_time)?;
+        validate_local_time(
+            "alerts.inspection.local_time",
+            &self.alerts.inspection.local_time,
+        )?;
         if self.alerts.inspection.lookback_hours == 0 {
             return Err(ConfigError::new(
                 "alerts.inspection.lookback_hours must be greater than 0",
@@ -847,7 +851,9 @@ fn dedup_alert_channels(values: Vec<AlertChannel>) -> Vec<AlertChannel> {
 }
 
 fn normalize_optional_trimmed(value: Option<String>) -> Option<String> {
-    value.map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn normalize_node_ids(field: &str, values: &[String]) -> Result<Vec<String>, ConfigError> {
