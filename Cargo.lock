@@ -1075,6 +1075,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "hex",
+ "hmac",
  "ipnet",
  "libc",
  "nodelite-proto",
@@ -1088,6 +1089,7 @@ dependencies = [
  "thiserror",
  "time",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite",
  "tokio-util",
  "toml",
@@ -1098,6 +1100,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "webpki-roots 1.0.6",
 ]
 
 [[package]]

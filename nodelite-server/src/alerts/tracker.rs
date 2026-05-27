@@ -11,6 +11,15 @@ pub(crate) enum AlertEventKind {
     Resolved,
 }
 
+impl AlertEventKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Triggered => "triggered",
+            Self::Resolved => "resolved",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AlertEvent {
     pub(crate) kind: AlertEventKind,

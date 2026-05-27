@@ -7,11 +7,14 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::{MissedTickBehavior, interval};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::state::SharedState;
 
-use super::{AlertEvent, AlertEventKind, AlertStateTracker, evaluate_rules};
+use super::{
+    AlertEvent, AlertEventKind, AlertStateTracker, deliver_alert_event, evaluate_rules,
+    webhook_endpoint_label,
+};
 
 const ALERT_EVALUATION_INTERVAL_SECS: u64 = 30;
 
@@ -52,6 +55,15 @@ async fn run_alert_runtime(
                 let matches = evaluate_rules(&config.rules, &statuses, now);
                 for event in tracker.update(&config.rules, &matches, now) {
                     log_alert_event(&event);
+                    if let Err(error) = deliver_alert_event(&config, &event).await {
+                        warn!(
+                            error = ?error,
+                            webhook = %webhook_endpoint_label(&config.webhook.url),
+                            rule_id = %event.rule.id,
+                            node_id = %event.node_id,
+                            "failed to deliver alert notification",
+                        );
+                    }
                 }
             }
         }

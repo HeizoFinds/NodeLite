@@ -1,9 +1,11 @@
 //! 告警运行时:把配置规则转换为可复用的触发与巡检摘要视图。
 
+mod delivery;
 mod evaluator;
 mod runtime;
 mod tracker;
 
+pub(crate) use delivery::{deliver_alert_event, webhook_endpoint_label};
 pub(crate) use evaluator::{
     AlertMetricReading, EvaluatedRule, build_inspection_report, evaluate_rules,
 };
