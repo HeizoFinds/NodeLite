@@ -6,9 +6,8 @@ use chrono::Utc;
 use tracing::error;
 
 use crate::AppState;
-use nodelite_proto::{
-    AlertComparator, AlertMetric, AlertRuleConfig, AlertScopeMode, AlertingConfig, NodeStatus,
-};
+use crate::alerts::{build_inspection_report, evaluate_rules};
+use nodelite_proto::{AlertingConfig, NodeStatus};
 
 use super::config_edit::persist_alerting_change;
 use super::helpers::settings_json_error;
@@ -186,17 +185,18 @@ fn alert_settings_view(config: &AlertingConfig) -> AlertSettingsView {
 }
 
 fn build_alert_preview(config: &AlertingConfig, statuses: &[NodeStatus]) -> AlertPreview {
+    let now = Utc::now();
+    let inspection = build_inspection_report(&config.inspection, statuses, now);
     AlertPreview {
-        generated_at: Utc::now(),
+        generated_at: now,
         triggered_rules: config
             .rules
             .iter()
             .filter(|rule| rule.enabled)
             .filter_map(|rule| {
-                let node_ids = statuses
+                let node_ids = evaluate_rules(std::slice::from_ref(rule), statuses, now)
                     .iter()
-                    .filter(|status| rule_matches_status(rule, status))
-                    .map(|status| status.identity.node_id.clone())
+                    .map(|matched| matched.node_id.clone())
                     .collect::<Vec<_>>();
                 if node_ids.is_empty() {
                     return None;
@@ -209,151 +209,44 @@ fn build_alert_preview(config: &AlertingConfig, statuses: &[NodeStatus]) -> Aler
                 })
             })
             .collect(),
-        inspection: build_inspection_preview(&config.inspection, statuses),
+        inspection: InspectionPreview {
+            total_nodes: inspection.total_nodes,
+            offline_nodes: inspection.offline_nodes,
+            latency_nodes: inspection.latency_nodes,
+            cpu_hot_nodes: inspection.cpu_hot_nodes,
+            memory_hot_nodes: inspection.memory_hot_nodes,
+            highlights: inspection
+                .highlights
+                .into_iter()
+                .map(|highlight| InspectionHighlight {
+                    node_id: highlight.node_id,
+                    node_label: highlight.node_label,
+                    reasons: highlight.reasons,
+                })
+                .collect(),
+        },
     }
-}
-
-fn build_inspection_preview(
-    inspection: &nodelite_proto::InspectionConfig,
-    statuses: &[NodeStatus],
-) -> InspectionPreview {
-    let mut offline_nodes = 0;
-    let mut latency_nodes = 0;
-    let mut cpu_hot_nodes = 0;
-    let mut memory_hot_nodes = 0;
-    let mut highlights = Vec::new();
-
-    for status in statuses {
-        let mut reasons = Vec::new();
-        if offline_minutes(status).is_some_and(|minutes| minutes >= inspection.offline_grace_minutes) {
-            offline_nodes += 1;
-            reasons.push("offline".to_string());
-        }
-        if status
-            .latency_ms
-            .is_some_and(|latency| latency >= inspection.latency_warn_ms)
-        {
-            latency_nodes += 1;
-            reasons.push("latency".to_string());
-        }
-        if status
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.cpu_usage_percent)
-            .is_some_and(|cpu| cpu >= inspection.cpu_warn_percent as f64)
-        {
-            cpu_hot_nodes += 1;
-            reasons.push("cpu".to_string());
-        }
-        if memory_percent(status)
-            .is_some_and(|memory| memory >= inspection.memory_warn_percent)
-        {
-            memory_hot_nodes += 1;
-            reasons.push("memory".to_string());
-        }
-
-        if reasons.is_empty() {
-            continue;
-        }
-        highlights.push(InspectionHighlight {
-            node_id: status.identity.node_id.clone(),
-            node_label: status.identity.node_label.clone(),
-            reasons,
-        });
-    }
-
-    InspectionPreview {
-        total_nodes: statuses.len(),
-        offline_nodes,
-        latency_nodes,
-        cpu_hot_nodes,
-        memory_hot_nodes,
-        highlights,
-    }
-}
-
-fn rule_matches_status(rule: &AlertRuleConfig, status: &NodeStatus) -> bool {
-    if !rule_matches_scope(rule, status) {
-        return false;
-    }
-    let Some(value) = metric_value(rule.metric.clone(), status) else {
-        return false;
-    };
-    comparator_matches(rule.comparator.clone(), value, rule.threshold)
-}
-
-fn rule_matches_scope(rule: &AlertRuleConfig, status: &NodeStatus) -> bool {
-    match rule.scope_mode {
-        AlertScopeMode::All => true,
-        AlertScopeMode::NodeIds => rule.node_ids.iter().any(|node_id| node_id == &status.identity.node_id),
-        AlertScopeMode::Tags => status
-            .identity
-            .tags
-            .iter()
-            .any(|tag| rule.tags.iter().any(|rule_tag| rule_tag == tag)),
-    }
-}
-
-fn metric_value(metric: AlertMetric, status: &NodeStatus) -> Option<u64> {
-    match metric {
-        AlertMetric::CpuUsagePercent => status
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.cpu_usage_percent.map(|value| value.round() as u64)),
-        AlertMetric::MemoryUsagePercent => memory_percent(status),
-        AlertMetric::DiskUsagePercent => max_disk_percent(status),
-        AlertMetric::LatencyMs => status.latency_ms,
-        AlertMetric::OfflineMinutes => offline_minutes(status),
-    }
-}
-
-fn comparator_matches(comparator: AlertComparator, left: u64, right: u64) -> bool {
-    match comparator {
-        AlertComparator::Gt => left >= right,
-        AlertComparator::Lt => left <= right,
-    }
-}
-
-fn memory_percent(status: &NodeStatus) -> Option<u64> {
-    let memory = &status.snapshot.as_ref()?.memory;
-    if memory.total_bytes == 0 {
-        return None;
-    }
-    Some(((memory.used_bytes.saturating_mul(100)) / memory.total_bytes).min(100))
-}
-
-fn max_disk_percent(status: &NodeStatus) -> Option<u64> {
-    status
-        .snapshot
-        .as_ref()?
-        .disks
-        .iter()
-        .filter(|disk| disk.total_bytes > 0)
-        .map(|disk| ((disk.used_bytes.saturating_mul(100)) / disk.total_bytes).min(100))
-        .max()
-}
-
-fn offline_minutes(status: &NodeStatus) -> Option<u64> {
-    if status.online {
-        return None;
-    }
-    let minutes = (Utc::now() - status.last_seen?).num_minutes();
-    Some(minutes.max(0) as u64)
 }
 
 #[cfg(test)]
 mod tests {
     use chrono::{Duration, Utc};
 
-    use super::{build_alert_preview, merge_alerting_request, rule_matches_status};
+    use super::{build_alert_preview, merge_alerting_request};
     use crate::test_support::{fake_snapshot, synthetic_identity};
     use nodelite_proto::{
-        AlertChannel, AlertComparator, AlertMetric, AlertRuleConfig, AlertScopeMode,
-        AlertSeverity, AlertSmtpConfig, AlertSmtpTransport, AlertWebhookConfig, AlertingConfig,
-        InspectionConfig, NodeStatus,
+        AlertChannel, AlertComparator, AlertMetric, AlertRuleConfig, AlertScopeMode, AlertSeverity,
+        AlertSmtpConfig, AlertSmtpTransport, AlertWebhookConfig, AlertingConfig, InspectionConfig,
+        NodeStatus,
     };
 
-    fn sample_status(node_id: &str, label: &str, online: bool, cpu: f64, latency_ms: u64) -> NodeStatus {
+    fn sample_status(
+        node_id: &str,
+        label: &str,
+        online: bool,
+        cpu: f64,
+        latency_ms: u64,
+    ) -> NodeStatus {
         let mut snapshot = fake_snapshot(300);
         snapshot.cpu_usage_percent = Some(cpu);
         snapshot.memory.used_bytes = 8;
@@ -428,29 +321,6 @@ mod tests {
 
         assert_eq!(merged.smtp.password.as_deref(), Some("smtp-secret"));
         assert_eq!(merged.webhook.secret.as_deref(), Some("hook-secret"));
-    }
-
-    #[test]
-    fn rule_matches_status_uses_scope_and_threshold() {
-        let status = sample_status("hk-01", "Hong Kong", true, 91.0, 140);
-        let rule = AlertRuleConfig {
-            id: "cpu-hot".to_string(),
-            name: "CPU".to_string(),
-            enabled: true,
-            metric: AlertMetric::CpuUsagePercent,
-            comparator: AlertComparator::Gt,
-            threshold: 90,
-            window_minutes: 5,
-            severity: AlertSeverity::Critical,
-            scope_mode: AlertScopeMode::Tags,
-            node_ids: Vec::new(),
-            tags: vec!["edge".to_string()],
-            delivery: vec![AlertChannel::Smtp],
-            cooldown_minutes: 30,
-            send_resolved: true,
-        };
-
-        assert!(rule_matches_status(&rule, &status));
     }
 
     #[test]
