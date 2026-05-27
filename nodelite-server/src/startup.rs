@@ -25,6 +25,7 @@ use crate::admission::{
     sensitive_auth_failure_admission_config,
 };
 use crate::agent_logs::AgentLogStore;
+use crate::alerts::spawn_alert_runtime;
 use crate::app_state::{AppState, ServerReadiness};
 use crate::audit::AuditLog;
 use crate::auth::{ReadonlyRouteAuth, TwoFactorSessions};
@@ -195,6 +196,11 @@ fn spawn_server_background_tasks(config: &ServerConfig, state: &AppState) -> Vec
         spawn_snapshot_persistor(
             state.shared.clone(),
             config.snapshot_path.clone(),
+            state.shutdown.clone(),
+        ),
+        spawn_alert_runtime(
+            state.alerting.clone(),
+            state.shared.clone(),
             state.shutdown.clone(),
         ),
     ];

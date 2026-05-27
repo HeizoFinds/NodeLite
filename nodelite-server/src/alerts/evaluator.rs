@@ -4,8 +4,18 @@ use nodelite_proto::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AlertMetricReading {
+    pub(crate) metric: AlertMetric,
+    pub(crate) value: u64,
+    pub(crate) threshold: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvaluatedRule {
+    pub(crate) rule_id: String,
     pub(crate) node_id: String,
+    pub(crate) node_label: String,
+    pub(crate) reading: AlertMetricReading,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +51,7 @@ pub(crate) fn evaluate_rules(
     matches
 }
 
-fn evaluate_rule(
+pub(crate) fn evaluate_rule(
     rule: &AlertRuleConfig,
     status: &NodeStatus,
     now: DateTime<Utc>,
@@ -51,7 +61,14 @@ fn evaluate_rule(
         return None;
     }
     Some(EvaluatedRule {
+        rule_id: rule.id.clone(),
         node_id: status.identity.node_id.clone(),
+        node_label: status.identity.node_label.clone(),
+        reading: AlertMetricReading {
+            metric: rule.metric.clone(),
+            value,
+            threshold: rule.threshold,
+        },
     })
 }
 
@@ -247,6 +264,9 @@ mod tests {
         let matched = evaluate_rule(&cpu_rule(), &status, now).expect("rule should match");
 
         assert_eq!(matched.node_id, "hk-01");
+        assert_eq!(matched.node_label, "Hong Kong");
+        assert_eq!(matched.reading.value, 91);
+        assert_eq!(matched.reading.threshold, 90);
     }
 
     #[test]
