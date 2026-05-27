@@ -36,11 +36,11 @@ use crate::fs_security::log_if_directory_is_not_private;
 use crate::handlers::{
     alert_settings, audit_log, bootstrap, brand_logo_dark_asset, brand_logo_light_asset,
     change_readonly_password, disable_two_factor, enable_two_factor, healthz, index,
-    index_settings_js_asset, install_agent_script, install_bootstrap, logout_and_reauth, metrics,
-    node_detail, node_history, node_logs, node_status, nodes, overview, readyz,
-    refresh_node_token, require_readonly_auth, server_update_log, settings, start_server_update,
-    start_two_factor_setup, ui_i18n_asset, update_alert_settings, verify_2fa_api,
-    verify_2fa_page,
+    index_alert_settings_js_asset, index_settings_js_asset, install_agent_script,
+    install_bootstrap, logout_and_reauth, metrics, node_detail, node_history, node_logs,
+    node_status, nodes, overview, readyz, refresh_node_token, require_readonly_auth,
+    server_update_log, settings, start_server_update, start_two_factor_setup, ui_i18n_asset,
+    update_alert_settings, verify_2fa_api, verify_2fa_page,
 };
 use crate::history::HistoryStore;
 use crate::registry::NodeRegistry;
@@ -305,6 +305,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/nodes/{node_id}", get(node_detail))
         .route("/assets/brand-logo-dark.webp", get(brand_logo_dark_asset))
         .route("/assets/brand-logo-light.webp", get(brand_logo_light_asset))
+        .route(
+            "/assets/index-alert-settings.js",
+            get(index_alert_settings_js_asset),
+        )
         .route("/assets/index-settings.js", get(index_settings_js_asset))
         .route("/assets/ui-i18n.json", get(ui_i18n_asset))
         .route("/api/bootstrap", get(bootstrap))

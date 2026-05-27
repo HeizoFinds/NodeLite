@@ -16,6 +16,7 @@ use tracing::error;
 /// 编译期嵌入的前端 i18n 字典,前端通过 `/assets/ui-i18n.json` 拉取。
 pub const UI_I18N_JSON: &str = include_str!("../assets/ui-i18n.json");
 pub const INDEX_SETTINGS_JS: &str = include_str!("../assets/index-settings.js");
+pub const INDEX_ALERT_SETTINGS_JS: &str = include_str!("../assets/index-alert-settings.js");
 /// 前端 i18n 字典对应的 HTTP 路径,统一注入到模板中。
 pub const UI_I18N_ASSET_PATH: &str = "/assets/ui-i18n.json";
 
@@ -236,7 +237,8 @@ mod tests {
 
     #[test]
     fn extract_inline_tag_bodies_stops_on_unclosed_blocks() {
-        let bodies = extract_inline_tag_bodies("<script>first()</script><script>second()", "script");
+        let bodies =
+            extract_inline_tag_bodies("<script>first()</script><script>second()", "script");
         assert_eq!(bodies, vec!["first()"]);
     }
 
