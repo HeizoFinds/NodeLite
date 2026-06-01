@@ -350,10 +350,7 @@ mod tests {
             generated_at,
             overview,
         };
-        let upsert = BrowserMessage::NodeUpsert {
-            generated_at,
-            node,
-        };
+        let upsert = BrowserMessage::NodeUpsert { generated_at, node };
         let removed = BrowserMessage::NodeRemoved {
             generated_at,
             node_id: "hk-01".to_string(),

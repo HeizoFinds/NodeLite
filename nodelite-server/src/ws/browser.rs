@@ -119,10 +119,7 @@ async fn run_browser_session(shared: SharedState, socket: WebSocket) -> anyhow::
 ///
 /// 浏览器只会发应用层 `Ping`;其它文本消息一律忽略(协议向前兼容)。协议级
 /// Ping/Pong 帧由底层自动应答,这里收到也忽略。
-async fn handle_client_message(
-    sender: &mut BrowserSink,
-    message: Message,
-) -> anyhow::Result<bool> {
+async fn handle_client_message(sender: &mut BrowserSink, message: Message) -> anyhow::Result<bool> {
     match message {
         Message::Text(text) => {
             if let Ok(BrowserMessage::Ping) = serde_json::from_str::<BrowserMessage>(&text) {
@@ -183,15 +180,28 @@ async fn push_incremental_updates(
         .cloned()
         .collect();
     for node_id in removed {
-        send_browser_message(sender, &BrowserMessage::NodeRemoved { generated_at, node_id })
-            .await?;
+        send_browser_message(
+            sender,
+            &BrowserMessage::NodeRemoved {
+                generated_at,
+                node_id,
+            },
+        )
+        .await?;
     }
 
     *last_nodes = index_by_node_id(current);
 
     // 概览聚合每次脏 tick 重算一次(已被去抖到 ≤1/秒),惰性计算避免高频重算。
     let overview = shared.overview_snapshot().await;
-    send_browser_message(sender, &BrowserMessage::OverviewUpdate { generated_at, overview }).await
+    send_browser_message(
+        sender,
+        &BrowserMessage::OverviewUpdate {
+            generated_at,
+            overview,
+        },
+    )
+    .await
 }
 
 fn index_by_node_id(nodes: Vec<NodeListItem>) -> HashMap<String, NodeListItem> {
