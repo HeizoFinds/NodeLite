@@ -144,5 +144,34 @@ describe('useNodesStore', () => {
 
       expect(store.nodes).toEqual([a]);
     });
+
+    it('InitialState resets timestamp guard (Lagged resync)', () => {
+      const store = useNodesStore();
+      const a = makeNode({ identity: { node_id: 'a', node_label: 'A', hostname: 'a', tags: [] } });
+      const b = makeNode({ identity: { node_id: 'b', node_label: 'B', hostname: 'b', tags: [] } });
+      const c = makeNode({ identity: { node_id: 'c', node_label: 'C', hostname: 'c', tags: [] } });
+
+      // Initial state at T1
+      store.applyServerState([a], '2026-06-01T12:01:00Z');
+      expect(store.lastGeneratedAt).toBe('2026-06-01T12:01:00Z');
+
+      // Incremental update at T2
+      store.upsertNode(b, '2026-06-01T12:02:00Z');
+      expect(store.nodes).toHaveLength(2);
+      expect(store.lastGeneratedAt).toBe('2026-06-01T12:02:00Z');
+
+      // Server detects Lagged, re-sends InitialState with same timestamp T2
+      // (idempotent resend — strict < allows this)
+      store.applyServerState([a, b, c], '2026-06-01T12:02:00Z');
+      expect(store.nodes).toHaveLength(3);
+      expect(store.nodes).toContainEqual(a);
+      expect(store.nodes).toContainEqual(b);
+      expect(store.nodes).toContainEqual(c);
+
+      // Subsequent incremental at T3 still works
+      const d = makeNode({ identity: { node_id: 'd', node_label: 'D', hostname: 'd', tags: [] } });
+      store.upsertNode(d, '2026-06-01T12:03:00Z');
+      expect(store.nodes).toHaveLength(4);
+    });
   });
 });
