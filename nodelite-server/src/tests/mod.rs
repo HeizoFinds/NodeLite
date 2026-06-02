@@ -8,11 +8,10 @@ pub(crate) use super::{
     uses_insecure_remote_public_base_url,
 };
 
-#[path = "../lib_tests.rs"]
-mod legacy;
-
 mod auth_runtime_tests;
 mod protected_headers_tests;
+mod proxy_admission_tests;
 mod readonly_auth_tests;
 mod route_surface_tests;
+mod sanitize_snapshot_tests;
 mod support;
