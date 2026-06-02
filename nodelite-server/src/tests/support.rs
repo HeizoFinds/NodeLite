@@ -147,8 +147,8 @@ pub(crate) fn json_write_routes() -> [(&'static str, Option<&'static str>); 7] {
     ]
 }
 
-pub(crate) fn small_json_write_requests(
-) -> [(&'static str, Option<&'static str>, &'static str); 7] {
+pub(crate) fn small_json_write_requests() -> [(&'static str, Option<&'static str>, &'static str); 7]
+{
     [
         ("/api/verify-2fa", None, r#"{"code":"000000"}"#),
         (

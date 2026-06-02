@@ -37,7 +37,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_ip_address ON audit_log(ip_address);
 pub(super) const AUDIT_CHANNEL_CAPACITY: usize = 4096;
 pub(super) const AUDIT_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 
-pub(super) fn open_audit_connection(path: &Path, sqlite_busy_timeout_secs: u64) -> Result<Connection> {
+pub(super) fn open_audit_connection(
+    path: &Path,
+    sqlite_busy_timeout_secs: u64,
+) -> Result<Connection> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {

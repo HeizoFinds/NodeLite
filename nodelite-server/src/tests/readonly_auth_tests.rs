@@ -14,7 +14,9 @@ use tokio::runtime::Runtime;
 use tower::util::ServiceExt;
 
 use super::AppState;
-use super::support::{protected_ok, protected_request, two_factor_auth_test_state, ws_upgrade_request};
+use super::support::{
+    protected_ok, protected_request, two_factor_auth_test_state, ws_upgrade_request,
+};
 use crate::audit::{AuditEvent, AuditEventType, AuditQuery, NewAuditEvent};
 use crate::handlers::{audit_log, require_readonly_auth};
 use crate::test_support::{TEST_BASIC_AUTH_HEADER, test_server_config, test_ws_config};
