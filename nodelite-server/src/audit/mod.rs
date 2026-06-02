@@ -3,6 +3,8 @@
 mod log;
 mod query;
 mod storage;
+#[cfg(test)]
+mod tests;
 mod types;
 mod writer;
 
