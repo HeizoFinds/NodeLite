@@ -62,8 +62,12 @@ onMounted(() => {
     </template>
 
     <section class="overview" data-test="dashboard-view">
-      <NodeMap />
-      <OverviewStats />
+      <section class="top-row" data-test="dashboard-top-row">
+        <NodeMap />
+        <div class="right-stack">
+          <OverviewStats />
+        </div>
+      </section>
       <NodeList />
     </section>
   </AppLayout>
@@ -71,8 +75,17 @@ onMounted(() => {
 
 <style scoped>
 .overview {
-  display: flex;
-  flex-direction: column;
+  display: block;
+}
+.top-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.right-stack {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 16px;
 }
 .dash-title {
@@ -85,5 +98,10 @@ onMounted(() => {
   margin: 4px 0 0;
   color: var(--text-muted);
   font-size: 13px;
+}
+@media (max-width: 1320px) {
+  .top-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>
