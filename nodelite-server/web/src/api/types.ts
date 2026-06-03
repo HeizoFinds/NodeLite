@@ -47,6 +47,10 @@ export interface NodeListSnapshot {
 /** GET /api/nodes — array of nodelite-proto NodeListItem (lightweight list shape) */
 export interface NodeListItem {
   identity: NodeListIdentity;
+  geoip_country: string | null;
+  geoip_city: string | null;
+  geoip_latitude: number | null;
+  geoip_longitude: number | null;
   snapshot: NodeListSnapshot | null;
   latency_ms: number | null;
   online: boolean;
@@ -131,6 +135,10 @@ export interface NodeSnapshot {
 export interface NodeStatus {
   identity: NodeIdentity;
   remote_ip: string | null;
+  geoip_country: string | null;
+  geoip_city: string | null;
+  geoip_latitude: number | null;
+  geoip_longitude: number | null;
   snapshot: NodeSnapshot | null;
   last_seen: string | null;
   latency_ms: number | null;

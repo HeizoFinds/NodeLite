@@ -82,6 +82,8 @@ const localeLabels: Record<SupportedLocale, string> = {
       </header>
 
       <slot />
+
+      <footer class="geoip-attribution">IP geolocation by DB-IP</footer>
     </main>
   </div>
 </template>
@@ -96,7 +98,7 @@ const localeLabels: Record<SupportedLocale, string> = {
 }
 .main {
   padding: 24px clamp(20px, 3vw, 36px) 40px;
-  max-width: 1680px;
+  max-width: 2560px;
   width: 100%;
 }
 .page-header {
@@ -139,5 +141,11 @@ const localeLabels: Record<SupportedLocale, string> = {
 .theme-toggle svg {
   width: 18px;
   height: 18px;
+}
+.geoip-attribution {
+  margin-top: 28px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
 }
 </style>
