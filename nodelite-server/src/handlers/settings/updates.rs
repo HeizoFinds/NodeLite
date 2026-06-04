@@ -71,7 +71,6 @@ pub(crate) async fn start_server_update(
         Ok(launch_mode) => {
             let launch_mode = match launch_mode {
                 UpdateLaunchMode::Systemd => "systemd",
-                UpdateLaunchMode::FallbackShell => "shell-fallback",
             };
             info!(
                 unit = %unit_name,

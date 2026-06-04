@@ -2,8 +2,8 @@
 //!
 //! `start_server_update` needs one place that can be tested without invoking the
 //! real systemd binary. This module isolates the `systemd-run --version` probe,
-//! classifies timeout/non-zero/missing outcomes, and falls back to a direct
-//! shell child when systemd is unavailable.
+//! classifies timeout/non-zero/missing outcomes, and fails closed when the
+//! sandboxed launcher is unavailable.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -21,7 +21,6 @@ const TEST_LAUNCH_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UpdateLaunchMode {
     Systemd,
-    FallbackShell,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +33,6 @@ enum SystemdAvailability {
 
 struct UpdateLauncher {
     systemd_run: PathBuf,
-    shell: PathBuf,
     probe_timeout: Duration,
 }
 
@@ -42,14 +40,9 @@ impl Default for UpdateLauncher {
     fn default() -> Self {
         Self {
             systemd_run: PathBuf::from("systemd-run"),
-            shell: PathBuf::from("sh"),
             probe_timeout: SYSTEMD_PROBE_TIMEOUT,
         }
     }
-}
-
-pub(super) async fn is_systemd_available() -> bool {
-    is_systemd_available_at(Path::new("systemd-run"), SYSTEMD_PROBE_TIMEOUT).await
 }
 
 pub(super) async fn spawn_server_update_subprocess(
@@ -62,6 +55,7 @@ pub(super) async fn spawn_server_update_subprocess(
         .await
 }
 
+#[cfg(test)]
 async fn is_systemd_available_at(systemd_run: &Path, probe_timeout: Duration) -> bool {
     matches!(
         probe_systemd_availability(systemd_run, probe_timeout).await,
@@ -116,14 +110,14 @@ impl UpdateLauncher {
         command: &str,
         writable_paths: &[PathBuf],
     ) -> io::Result<UpdateLaunchMode> {
-        let systemd_available = if self.systemd_run == Path::new("systemd-run")
+        let availability = if self.systemd_run == Path::new("systemd-run")
             && self.probe_timeout == SYSTEMD_PROBE_TIMEOUT
         {
-            is_systemd_available().await
+            probe_systemd_availability(Path::new("systemd-run"), SYSTEMD_PROBE_TIMEOUT).await
         } else {
-            is_systemd_available_at(&self.systemd_run, self.probe_timeout).await
+            probe_systemd_availability(&self.systemd_run, self.probe_timeout).await
         };
-        self.spawn_server_update_with_probe(unit_name, command, writable_paths, systemd_available)
+        self.spawn_server_update_with_probe(unit_name, command, writable_paths, availability)
     }
 
     fn spawn_server_update_with_probe(
@@ -131,16 +125,26 @@ impl UpdateLauncher {
         unit_name: &str,
         command: &str,
         writable_paths: &[PathBuf],
-        systemd_available: bool,
+        availability: SystemdAvailability,
     ) -> io::Result<UpdateLaunchMode> {
-        if systemd_available {
-            self.spawn_systemd_run(unit_name, command, writable_paths)?;
-            return Ok(UpdateLaunchMode::Systemd);
+        match availability {
+            SystemdAvailability::Available => {
+                self.spawn_systemd_run(unit_name, command, writable_paths)?;
+                Ok(UpdateLaunchMode::Systemd)
+            }
+            SystemdAvailability::Missing => {
+                warn!("systemd-run is unavailable for server updates; refusing unsafe shell fallback");
+                Err(unsupported_update_launcher())
+            }
+            SystemdAvailability::TimedOut => {
+                warn!("systemd-run probe timed out for server updates; refusing unsafe shell fallback");
+                Err(unsupported_update_launcher())
+            }
+            SystemdAvailability::Failed => {
+                warn!("systemd-run probe failed for server updates; refusing unsafe shell fallback");
+                Err(unsupported_update_launcher())
+            }
         }
-
-        warn!("systemd-run is unavailable for server updates; falling back to direct shell launch");
-        self.spawn_fallback_shell(command)?;
-        Ok(UpdateLaunchMode::FallbackShell)
     }
 
     fn spawn_systemd_run(
@@ -171,21 +175,18 @@ impl UpdateLauncher {
             .spawn()
             .map(|_| ())
     }
+}
 
-    fn spawn_fallback_shell(&self, command: &str) -> io::Result<()> {
-        StdCommand::new(&self.shell)
-            .arg("-c")
-            .arg(command)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map(|_| ())
-    }
+fn unsupported_update_launcher() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "manual server update requires systemd-run sandboxing",
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use std::env;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
@@ -211,7 +212,7 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("clock should be monotonic enough")
                 .as_nanos();
-            let path = PathBuf::from("/private/tmp").join(format!("nodelite-{label}-{unique}"));
+            let path = env::temp_dir().join(format!("nodelite-{label}-{unique}"));
             fs::create_dir_all(&path).expect("temp dir should exist");
             Self { path }
         }
@@ -232,6 +233,13 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[test]
+    fn temp_script_dir_uses_system_temp_root() {
+        let dir = TempScriptDir::new("temp-root");
+
+        assert!(dir.path.starts_with(env::temp_dir()));
     }
 
     #[tokio::test]
@@ -291,7 +299,6 @@ mod tests {
         );
         let launcher = UpdateLauncher {
             systemd_run: systemd_script,
-            shell: PathBuf::from("sh"),
             probe_timeout: Duration::from_millis(50),
         };
 
@@ -303,7 +310,7 @@ mod tests {
                     PathBuf::from("/opt/nodelite"),
                     PathBuf::from("/usr/local/bin"),
                 ],
-                true,
+                SystemdAvailability::Available,
             )
             .expect("systemd launch should succeed");
 
@@ -315,30 +322,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_server_update_falls_back_when_systemd_is_missing() {
+    async fn spawn_server_update_rejects_missing_systemd_without_shell_fallback() {
         let dir = TempScriptDir::new("systemd-fallback");
         let marker = dir.path.join("shell.args");
-        let shell_script = dir.write_script(
-            "sh",
-            &format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n",
-                shell_quote(&marker.display().to_string())
-            ),
-        );
         let launcher = UpdateLauncher {
             systemd_run: PathBuf::from("/missing/systemd-run"),
-            shell: shell_script,
             probe_timeout: Duration::from_millis(50),
         };
 
-        let mode = launcher
-            .spawn_server_update_with_probe("ignored-unit", "echo fallback", &[], false)
-            .expect("fallback shell launch should succeed");
+        let error = launcher
+            .spawn_server_update_with_probe(
+                "ignored-unit",
+                "echo fallback",
+                &[],
+                SystemdAvailability::Missing,
+            )
+            .expect_err("missing systemd should fail closed");
 
-        assert_eq!(mode, UpdateLaunchMode::FallbackShell);
-        let captured = wait_for_file(&marker).await;
-        assert!(captured.contains("-c"));
-        assert!(captured.contains("echo fallback"));
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        sleep(Duration::from_millis(50)).await;
+        assert!(!marker.exists(), "shell fallback should not have been spawned");
     }
 
     async fn wait_for_file(path: &Path) -> String {
