@@ -75,6 +75,7 @@ const title = computed(
 );
 const ip = computed(() => (node.value ? ipFromNode(node.value) : null));
 const location = computed(() => (node.value ? locationFromNode(node.value) : null));
+const isLan = computed(() => node.value?.geoip_country === 'LAN');
 const uptime = computed(() => uptimeParts(node.value?.snapshot?.uptime_secs));
 
 // Render not-found state only when the API returned 404. Other errors (500,
@@ -208,8 +209,8 @@ const modalConfig = computed(() => {
           {{ $t(statusLabelKey) }}
         </span>
         <div class="node-title__meta" data-test="node-meta">
-          <span v-if="ip">{{ $t('node.meta.ip', { ip }) }}</span>
-          <span v-if="location">{{ location }}</span>
+          <span v-if="ip">{{ $t('node.meta.ip', { ip }) }}<template v-if="isLan"> (LAN)</template></span>
+          <span v-if="location && !isLan">{{ location }}</span>
           <span v-if="uptime && uptime.days > 0">{{ $t('node.meta.uptime_days', { days: uptime.days }) }}</span>
           <span v-else-if="uptime">{{ $t('node.meta.uptime_hours', { hours: uptime.hours }) }}</span>
         </div>

@@ -24,6 +24,7 @@ export type NodeStatus = 'online' | 'offline' | 'latency';
 
 /** Region anchor points as {x, y} fractions of the map (0..1). */
 export const REGION_HINTS: Record<string, readonly [number, number]> = {
+  lan: [0.08, 0.1],
   cn: [0.78, 0.42],
   china: [0.78, 0.42],
   hk: [0.79, 0.5],

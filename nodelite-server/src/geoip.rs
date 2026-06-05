@@ -290,12 +290,14 @@ fn is_lan_ip(ip: IpAddr) -> bool {
 }
 
 fn is_lan_ipv4(ip: Ipv4Addr) -> bool {
+    let octets = ip.octets();
     ip.is_private()
+        || (octets[0] == 100 && (64..=127).contains(&octets[1]))
         || ip.is_loopback()
         || ip.is_link_local()
         || ip.is_broadcast()
         || ip.is_documentation()
-        || ip.octets()[0] == 0
+        || octets[0] == 0
 }
 
 fn is_lan_ipv6(ip: Ipv6Addr) -> bool {
@@ -322,6 +324,7 @@ mod tests {
             "10.0.0.1",
             "172.16.0.1",
             "192.168.1.10",
+            "100.64.0.1",
             "127.0.0.1",
             "169.254.1.1",
             "192.0.2.1",

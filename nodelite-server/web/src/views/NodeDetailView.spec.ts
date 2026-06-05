@@ -164,6 +164,19 @@ describe('NodeDetailView', () => {
     expect(wrapper.find('[data-test="node-meta"]').text()).toContain('eu');
   });
 
+  it('annotates LAN IPs in the detail header', async () => {
+    mockStatus.mockResolvedValueOnce(
+      makeNodeStatus({
+        identity: { ...makeNodeStatus().identity, node_id: 'srv-lan', node_label: 'LAN Node', tags: [] },
+        remote_ip: '100.64.0.8',
+        geoip_country: 'LAN',
+      }),
+    );
+
+    const { wrapper } = await mountDetail('srv-lan');
+    expect(wrapper.find('[data-test="node-meta"]').text()).toContain('IP: 100.64.0.8 (LAN)');
+  });
+
   it('renders the six tabs including settings', async () => {
     const { wrapper } = await mountDetail();
     for (const tab of ['overview', 'monitor', 'network', 'hardware', 'logs', 'settings']) {

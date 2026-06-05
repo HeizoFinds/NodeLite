@@ -115,6 +115,18 @@ describe('nodePosition', () => {
     expect(y).toBeGreaterThanOrEqual(0.2);
     expect(y).toBeLessThanOrEqual(0.8);
   });
+
+  it('pins LAN nodes near the local-network corner', () => {
+    const node = makeNode({
+      identity: { node_id: 'lan-1', node_label: 'L', hostname: 'h', tags: [] },
+      geoip_country: 'LAN',
+    });
+    const { x, y } = nodePosition(node);
+    expect(x).toBeGreaterThanOrEqual(0.02);
+    expect(x).toBeLessThanOrEqual(0.14);
+    expect(y).toBeGreaterThanOrEqual(0.02);
+    expect(y).toBeLessThanOrEqual(0.18);
+  });
 });
 
 describe('nodeStatusKey', () => {
