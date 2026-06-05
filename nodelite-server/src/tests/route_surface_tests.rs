@@ -291,6 +291,60 @@ fn router_compresses_text_assets_but_not_webp() {
 }
 
 #[test]
+fn metrics_response_sets_content_length_for_uncompressed_body() {
+    let runtime = Runtime::new().expect("runtime should build");
+    runtime.block_on(async {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("nodelite-metrics-length-test-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+        let registry_path = temp_dir.join("server.json");
+        let mut config = test_server_config(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+            "https://monitor.example.com".to_string(),
+            registry_path,
+            temp_dir.join("history.sqlite3"),
+            temp_dir.join("snapshot.json"),
+        );
+        config.readonly_auth = None;
+        config.ws = test_ws_config(32, 8);
+        let state = AppState::test_fixture(config.into(), Arc::new(temp_dir.join("server.toml")))
+            .await
+            .expect("state fixture should build");
+        let app = crate::startup::build_router(state.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("response should be produced");
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_length = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .expect("metrics should set content-length")
+            .to_str()
+            .expect("content-length should be utf-8")
+            .parse::<usize>()
+            .expect("content-length should parse");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("metrics body should collect");
+        assert_eq!(content_length, body.len());
+
+        state.history.shutdown().await;
+        state.audit_log.shutdown().await;
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    });
+}
+
+#[test]
 fn spa_history_mode_routes_serve_index_shell() {
     let runtime = Runtime::new().expect("runtime should build");
     runtime.block_on(async {
