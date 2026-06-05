@@ -503,5 +503,4 @@ mod tests {
             .expect("create replacement session");
         assert!(sessions.pending_exists(&replacement));
     }
-
 }
