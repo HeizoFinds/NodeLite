@@ -53,6 +53,58 @@ fn newer_session_replaces_older_one() {
 }
 
 #[test]
+fn newer_session_refreshes_remote_ip_and_geoip() {
+    let mut registry = Registry::default();
+    let now = Utc
+        .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
+        .single()
+        .expect("valid test datetime");
+    let identity = sample_identity();
+
+    registry.register_node(
+        1,
+        identity.clone(),
+        Some("198.51.100.10".to_string()),
+        Some(GeoIpLocation {
+            country: "US".to_string(),
+            city: Some("Mountain View".to_string()),
+            latitude: Some(37.386),
+            longitude: Some(-122.0838),
+        }),
+        now,
+    );
+    registry.register_node(
+        2,
+        identity,
+        Some("203.0.113.20".to_string()),
+        Some(GeoIpLocation {
+            country: "JP".to_string(),
+            city: Some("Tokyo".to_string()),
+            latitude: Some(35.6762),
+            longitude: Some(139.6503),
+        }),
+        now + ChronoDuration::seconds(3),
+    );
+
+    let status = registry
+        .list_statuses()
+        .into_iter()
+        .find(|node| node.identity.node_id == "hk-01")
+        .expect("node status");
+    assert_eq!(status.remote_ip.as_deref(), Some("203.0.113.20"));
+    assert_eq!(status.geoip_country.as_deref(), Some("JP"));
+    assert_eq!(status.geoip_city.as_deref(), Some("Tokyo"));
+
+    let summary = registry
+        .list_node_summaries()
+        .into_iter()
+        .find(|node| node.identity.node_id == "hk-01")
+        .expect("node summary");
+    assert_eq!(summary.geoip_country.as_deref(), Some("JP"));
+    assert_eq!(summary.geoip_city.as_deref(), Some("Tokyo"));
+}
+
+#[test]
 fn stale_nodes_are_marked_offline() {
     let mut registry = Registry::default();
     let now = Utc

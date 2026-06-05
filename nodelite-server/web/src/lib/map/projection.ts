@@ -112,26 +112,12 @@ export function nodeRegionKey(node: NodeListItem): string | null {
   for (const tag of tags) {
     const lower = String(tag).toLowerCase();
     if (REGION_HINTS[lower]) return lower;
-    const m = lower.match(/^(?:country|region|cc|loc)[:=](\w+)$/);
+    const m = lower.match(/^(?:flag|country|region|cc|loc)[:=](\w+)$/);
     if (m && m[1] && REGION_HINTS[m[1]]) return m[1];
   }
   const geoipCountry = String(node.geoip_country || '').toLowerCase();
   if (geoipCountry === 'lan') return 'lan';
   if (geoipCountry && REGION_HINTS[geoipCountry]) return geoipCountry;
-  const hostname = String(node.identity.hostname || '').toLowerCase();
-  for (const key of Object.keys(REGION_HINTS)) {
-    if (
-      hostname.includes(`-${key}-`) ||
-      hostname.startsWith(`${key}-`) ||
-      hostname.endsWith(`-${key}`)
-    ) {
-      return key;
-    }
-  }
-  const idLower = String(node.identity.node_id || '').toLowerCase();
-  for (const key of Object.keys(REGION_HINTS)) {
-    if (idLower.includes(key)) return key;
-  }
   return null;
 }
 
