@@ -53,6 +53,13 @@ pub(crate) const PROTECTED_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; 
      form-action 'self'";
 pub(crate) const PROTECTED_CACHE_CONTROL: &str = "no-store, no-cache, must-revalidate";
 pub(crate) const JSON_WRITE_BODY_LIMIT_BYTES: usize = 16 * 1024;
+const NODELITE_LOG_FORMAT_ENV: &str = "NODELITE_LOG_FORMAT";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LogFormat {
+    Compact,
+    Json,
+}
 
 struct ServerRuntime {
     state: AppState,
@@ -473,14 +480,27 @@ pub(crate) async fn load_server_config(path: &Path) -> Result<ServerConfig> {
 
 /// 初始化 `tracing` 日志,支持通过 `RUST_LOG` 调整级别。
 pub(crate) fn init_tracing() {
-    tracing_subscriber::fmt()
+    let subscriber = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "nodelite_server=info,tower_http=info".into()),
         )
-        .with_target(false)
-        .compact()
-        .init();
+        .with_target(false);
+    match selected_log_format() {
+        LogFormat::Compact => subscriber.compact().init(),
+        LogFormat::Json => subscriber.json().init(),
+    }
+}
+
+fn selected_log_format() -> LogFormat {
+    parse_log_format(std::env::var(NODELITE_LOG_FORMAT_ENV).ok().as_deref())
+}
+
+fn parse_log_format(value: Option<&str>) -> LogFormat {
+    match value {
+        Some(raw) if raw.eq_ignore_ascii_case("json") => LogFormat::Json,
+        _ => LogFormat::Compact,
+    }
 }
 
 /// 启动期验证 `READONLY_PASSWORD`:复用 `auth::validate_password_strength`,
@@ -543,5 +563,23 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => info!("received SIGINT; initiating graceful shutdown"),
         _ = terminate => info!("received SIGTERM; initiating graceful shutdown"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LogFormat, parse_log_format};
+
+    #[test]
+    fn parses_json_log_format_from_env_value() {
+        assert_eq!(parse_log_format(Some("json")), LogFormat::Json);
+        assert_eq!(parse_log_format(Some("JSON")), LogFormat::Json);
+    }
+
+    #[test]
+    fn defaults_to_compact_for_missing_or_invalid_log_format() {
+        assert_eq!(parse_log_format(None), LogFormat::Compact);
+        assert_eq!(parse_log_format(Some("compact")), LogFormat::Compact);
+        assert_eq!(parse_log_format(Some("ndjson")), LogFormat::Compact);
     }
 }
