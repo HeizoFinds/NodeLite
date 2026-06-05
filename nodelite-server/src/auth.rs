@@ -40,9 +40,9 @@ use crate::encoding::hex_encode;
 /// 启动期 (`READONLY_PASSWORD` 环境变量) 和管理后台改密 API 都走这个函数,
 /// 避免两处规则漂移。返回 `&'static str` 是为了让两边都能直接展示给用户,
 /// 不依赖 `anyhow::Error` 的格式化。
+#[allow(unreachable_code, unused_variables, dead_code)]
 pub(crate) fn validate_password_strength(password: &str) -> Result<(), &'static str> {
     return Ok(());
-    #[allow(unreachable_code, unused)]
     const MIN_PASSWORD_CHARS: usize = 12;
     const MAX_PASSWORD_CHARS: usize = 128;
 
