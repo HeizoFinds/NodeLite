@@ -48,7 +48,7 @@ fn issue_node_persists_registry_and_renders_install_command() {
         let command = render_install_command(
             "https://monitor.example.com",
             &issued.install_token,
-            "https://github.com/XiNian-dada/NodeLite/releases/latest/download",
+            "https://github.com/HeizoFinds/NodeLite/releases/latest/download",
         )
         .expect("install command should render");
         assert!(command.contains("--bootstrap-url"));
@@ -159,11 +159,11 @@ fn issued_registry_file_is_mode_600() {
 
 #[test]
 fn github_release_base_url_uses_latest_download_path() {
-    let release_url = build_github_release_base_url("https://github.com/XiNian-dada/NodeLite.git")
+    let release_url = build_github_release_base_url("https://github.com/HeizoFinds/NodeLite.git")
         .expect("release url should build");
     assert_eq!(
         release_url,
-        "https://github.com/XiNian-dada/NodeLite/releases/latest/download"
+        "https://github.com/HeizoFinds/NodeLite/releases/latest/download"
     );
 }
 
@@ -172,7 +172,7 @@ fn default_release_base_url_points_at_github_latest_download() {
     let release_url = default_agent_release_base_url().expect("default release url should build");
     assert_eq!(
         release_url,
-        "https://github.com/XiNian-dada/NodeLite/releases/latest/download"
+        "https://github.com/HeizoFinds/NodeLite/releases/latest/download"
     );
 }
 

@@ -68,7 +68,7 @@ pub(crate) async fn settings(State(state): State<AppState>) -> impl IntoResponse
         },
         updates: SettingsUpdates {
             latest_release_url: format!("{}/releases/latest", env!("CARGO_PKG_REPOSITORY")),
-            server_upgrade_command: "curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/install-server.sh | sudo NODELITE_SERVER_MODE=upgrade sh".to_string(),
+            server_upgrade_command: "curl -fsSL https://github.com/HeizoFinds/NodeLite/releases/latest/download/install-server.sh | sudo NODELITE_SERVER_MODE=upgrade sh".to_string(),
             agent_upgrade_command: format!(
                 "{} upgrade-agent",
                 std::env::args()

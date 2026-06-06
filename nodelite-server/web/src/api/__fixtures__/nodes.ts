@@ -27,7 +27,7 @@ export function makeSettings(overrides: Partial<SettingsResponse> = {}): Setting
   const base: SettingsResponse = {
     service: 'nodelite-server',
     server_version: '2.3.0',
-    repository: 'https://github.com/XiNian-dada/NodeLite',
+    repository: 'https://github.com/HeizoFinds/NodeLite',
     public_base_url: 'http://localhost:8080',
     listen: '127.0.0.1:8080',
     config_path: '/etc/nodelite/server.toml',
@@ -45,7 +45,7 @@ export function makeSettings(overrides: Partial<SettingsResponse> = {}): Setting
       pending_ttl_secs: 300,
     },
     updates: {
-      latest_release_url: 'https://github.com/XiNian-dada/NodeLite/releases/latest',
+      latest_release_url: 'https://github.com/HeizoFinds/NodeLite/releases/latest',
       server_upgrade_command: 'curl -fsSL https://example/install.sh | sh',
       agent_upgrade_command: 'curl -fsSL https://example/agent.sh | sh',
     },

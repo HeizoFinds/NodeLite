@@ -52,9 +52,9 @@ MODE="${NODELITE_AGENT_MODE:-auto}"
 # 留空时自动使用 GitHub 最新正式版。
 VERSION="${NODELITE_AGENT_VERSION:-}"
 if [ -n "$VERSION" ]; then
-  BASE_URL="${NODELITE_AGENT_BASE_URL:-https://github.com/XiNian-dada/NodeLite/releases/download/${VERSION}}"
+  BASE_URL="${NODELITE_AGENT_BASE_URL:-https://github.com/HeizoFinds/NodeLite/releases/download/${VERSION}}"
 else
-  BASE_URL="${NODELITE_AGENT_BASE_URL:-https://github.com/XiNian-dada/NodeLite/releases/latest/download}"
+  BASE_URL="${NODELITE_AGENT_BASE_URL:-https://github.com/HeizoFinds/NodeLite/releases/latest/download}"
 fi
 CHECKSUMS_URL="${NODELITE_AGENT_CHECKSUMS_URL:-}"
 BINARY_URL="${NODELITE_AGENT_BINARY_URL:-}"

@@ -18,9 +18,9 @@ umask 077
 # 留空时自动使用 GitHub 最新正式版。
 VERSION="${NODELITE_SERVER_VERSION:-}"
 if [ -n "$VERSION" ]; then
-  BASE_URL="${NODELITE_SERVER_BASE_URL:-https://github.com/XiNian-dada/NodeLite/releases/download/${VERSION}}"
+  BASE_URL="${NODELITE_SERVER_BASE_URL:-https://github.com/HeizoFinds/NodeLite/releases/download/${VERSION}}"
 else
-  BASE_URL="${NODELITE_SERVER_BASE_URL:-https://github.com/XiNian-dada/NodeLite/releases/latest/download}"
+  BASE_URL="${NODELITE_SERVER_BASE_URL:-https://github.com/HeizoFinds/NodeLite/releases/latest/download}"
 fi
 INSTALL_ROOT_DEFAULT="/opt/nodelite"
 LISTEN_HOST_DEFAULT="127.0.0.1"
