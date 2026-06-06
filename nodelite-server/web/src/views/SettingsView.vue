@@ -26,10 +26,10 @@ onMounted(() => {
     <section class="settings" data-test="settings-view">
       <template v-if="store.data">
         <div class="settings__grid">
-          <ServerUpdateCard :settings="store.data" />
-          <OpsCard :settings="store.data" />
+          <ServerUpdateCard class="settings__card" :settings="store.data" />
+          <OpsCard class="settings__card" :settings="store.data" />
         </div>
-        <TokenTable :agents="store.data.agents" />
+        <TokenTable class="settings__tokens" :agents="store.data.agents" />
       </template>
       <SettingsMessage
         v-else-if="store.error"
@@ -49,12 +49,21 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  width: 100%;
+  max-width: 1180px;
 }
 .settings__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+}
+.settings__card,
+.settings__tokens {
+  min-width: 0;
+}
+.settings__card {
+  height: 100%;
 }
 .page-heading {
   margin: 0;
@@ -70,5 +79,13 @@ onMounted(() => {
 .placeholder {
   color: var(--text-muted);
   font-size: 13px;
+}
+@media (max-width: 880px) {
+  .settings {
+    max-width: none;
+  }
+  .settings__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>
