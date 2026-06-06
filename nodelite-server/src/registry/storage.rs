@@ -17,6 +17,7 @@ use super::{RegistryError, RegistryFile, RegistryResult, RegistryState};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
 const MAX_REGISTRY_WRITE_RETRIES: usize = 32;
+pub(super) const MAX_REGISTRY_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 #[cfg(test)]
 static REGISTRY_FILE_READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -97,10 +98,42 @@ pub(super) async fn load_registry_state(path: &Path) -> RegistryResult<RegistryS
 }
 
 async fn load_registry_file(path: &Path) -> RegistryResult<RegistryFile> {
+    let metadata = match fs::metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RegistryFile::default());
+        }
+        Err(error) => return Err(RegistryError::io("stat-ing", path, error)),
+    };
+    ensure_registry_file_size(path, metadata.len())?;
+
+    let content = match fs::read_to_string(path).await {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RegistryFile::default());
+        }
+        Err(error) => return Err(RegistryError::io("reading", path, error)),
+    };
     #[cfg(test)]
     REGISTRY_FILE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    let content = match fs::read_to_string(path).await {
+    let file: RegistryFile =
+        serde_json::from_str(&content).map_err(|error| RegistryError::parse(path, error))?;
+    validate_registry_file(path, &file)?;
+    Ok(file)
+}
+
+fn load_registry_file_sync(path: &Path) -> RegistryResult<RegistryFile> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RegistryFile::default());
+        }
+        Err(error) => return Err(RegistryError::io("stat-ing", path, error)),
+    };
+    ensure_registry_file_size(path, metadata.len())?;
+
+    let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(RegistryFile::default());
@@ -114,19 +147,15 @@ async fn load_registry_file(path: &Path) -> RegistryResult<RegistryFile> {
     Ok(file)
 }
 
-fn load_registry_file_sync(path: &Path) -> RegistryResult<RegistryFile> {
-    let content = match std::fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(RegistryFile::default());
-        }
-        Err(error) => return Err(RegistryError::io("reading", path, error)),
-    };
-
-    let file: RegistryFile =
-        serde_json::from_str(&content).map_err(|error| RegistryError::parse(path, error))?;
-    validate_registry_file(path, &file)?;
-    Ok(file)
+fn ensure_registry_file_size(path: &Path, len: u64) -> RegistryResult<()> {
+    if len > MAX_REGISTRY_FILE_BYTES {
+        return Err(RegistryError::file_too_large(
+            path,
+            len,
+            MAX_REGISTRY_FILE_BYTES,
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn load_registry_state_from_file(

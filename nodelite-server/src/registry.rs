@@ -41,13 +41,14 @@ pub use self::render::{
     build_install_script_url, default_agent_release_base_url, render_agent_config,
     render_install_command, render_upgrade_command,
 };
+#[cfg(test)]
+use self::storage::{
+    MAX_REGISTRY_FILE_BYTES, registry_file_read_count, release_registry_lock_with,
+    reset_registry_file_read_count,
+};
 use self::storage::{
     load_registry_state, load_registry_state_with_fingerprint, mutate_registry_file,
     registry_file_fingerprint,
-};
-#[cfg(test)]
-use self::storage::{
-    registry_file_read_count, release_registry_lock_with, reset_registry_file_read_count,
 };
 #[cfg(test)]
 use self::token::token_is_unexpired;
