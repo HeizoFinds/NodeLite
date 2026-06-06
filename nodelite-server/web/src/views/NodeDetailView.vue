@@ -213,11 +213,10 @@ const modalConfig = computed(() => {
           <span
             v-if="ip"
             class="node-ip-toggle"
-            :class="{ 'node-ip-toggle--revealed': ipRevealed }"
             :title="$t(ipRevealed ? 'node.meta.ip_hide' : 'node.meta.ip_reveal')"
             data-test="node-ip-toggle"
             @click="ipRevealed = !ipRevealed"
-          >{{ $t('node.meta.ip', { ip }) }}<template v-if="isLan"> (LAN)</template></span>
+          >IP: <span class="node-ip-value" :class="{ 'node-ip-value--revealed': ipRevealed }">{{ ip }}</span><template v-if="isLan"> (LAN)</template></span>
           <span v-if="location && !isLan">{{ location }}</span>
           <span v-if="uptime && uptime.days > 0">{{ $t('node.meta.uptime_days', { days: uptime.days }) }}</span>
           <span v-else-if="uptime">{{ $t('node.meta.uptime_hours', { hours: uptime.hours }) }}</span>
@@ -351,11 +350,14 @@ const modalConfig = computed(() => {
 }
 .node-ip-toggle {
   cursor: pointer;
+}
+.node-ip-value {
+  display: inline-block;
   filter: blur(4px);
   user-select: none;
   transition: filter 0.2s ease;
 }
-.node-ip-toggle--revealed {
+.node-ip-value--revealed {
   filter: none;
   user-select: text;
 }
