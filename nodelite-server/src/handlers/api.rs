@@ -1,13 +1,11 @@
-use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 
 use axum::Json;
-use axum::body::{Body, Bytes};
+use axum::body::Bytes;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chrono::{TimeZone, Utc};
-use futures::stream;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
@@ -153,26 +151,25 @@ pub(crate) async fn metrics(State(state): State<AppState>) -> Response {
         registry_disk_entries_total,
         ws_messages: state.shared.ws_message_metrics(),
     });
-    let dynamic_body = metrics_dynamic_body(
-        cached_body.len(),
+    let body = metrics_response_body(
+        cached_body,
         format!("{writer_metrics}{api_cache_metrics}{agent_log_metrics}{runtime_metrics}"),
     );
-    let body = Body::from_stream(stream::iter([
-        Ok::<Bytes, Infallible>(cached_body),
-        Ok(dynamic_body),
-    ]));
+    let content_length = body.len().to_string();
     (
         [
             (header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE),
             (header::CACHE_CONTROL, "no-store, no-cache, must-revalidate"),
             (header::PRAGMA, "no-cache"),
+            (header::CONTENT_LENGTH, content_length.as_str()),
         ],
         body,
     )
         .into_response()
 }
 
-fn metrics_dynamic_body(cached_body_len: usize, mut dynamic_body: String) -> Bytes {
+fn metrics_response_body(cached_body: Bytes, dynamic_body: String) -> Bytes {
+    let cached_body_len = cached_body.len();
     let mut response_body_bytes = cached_body_len.saturating_add(dynamic_body.len());
     loop {
         let response_metric = render_metrics_response_body_bytes(response_body_bytes as u64);
@@ -180,8 +177,12 @@ fn metrics_dynamic_body(cached_body_len: usize, mut dynamic_body: String) -> Byt
             .saturating_add(dynamic_body.len())
             .saturating_add(response_metric.len());
         if next_response_body_bytes == response_body_bytes {
-            dynamic_body.push_str(&response_metric);
-            return Bytes::from(dynamic_body);
+            let mut full_body =
+                Vec::with_capacity(cached_body_len + dynamic_body.len() + response_metric.len());
+            full_body.extend_from_slice(cached_body.as_ref());
+            full_body.extend_from_slice(dynamic_body.as_bytes());
+            full_body.extend_from_slice(response_metric.as_bytes());
+            return Bytes::from(full_body);
         }
         response_body_bytes = next_response_body_bytes;
     }

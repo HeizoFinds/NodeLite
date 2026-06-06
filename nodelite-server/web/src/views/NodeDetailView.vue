@@ -76,6 +76,7 @@ const title = computed(
 const ip = computed(() => (node.value ? ipFromNode(node.value) : null));
 const ipRevealed = ref(false);
 const location = computed(() => (node.value ? locationFromNode(node.value) : null));
+const isLan = computed(() => node.value?.geoip_country === 'LAN');
 const uptime = computed(() => uptimeParts(node.value?.snapshot?.uptime_secs));
 
 // Render not-found state only when the API returned 404. Other errors (500,
@@ -216,8 +217,8 @@ const modalConfig = computed(() => {
             :title="$t(ipRevealed ? 'node.meta.ip_hide' : 'node.meta.ip_reveal')"
             data-test="node-ip-toggle"
             @click="ipRevealed = !ipRevealed"
-          >{{ $t('node.meta.ip', { ip }) }}</span>
-          <span v-if="location">{{ location }}</span>
+          >{{ $t('node.meta.ip', { ip }) }}<template v-if="isLan"> (LAN)</template></span>
+          <span v-if="location && !isLan">{{ location }}</span>
           <span v-if="uptime && uptime.days > 0">{{ $t('node.meta.uptime_days', { days: uptime.days }) }}</span>
           <span v-else-if="uptime">{{ $t('node.meta.uptime_hours', { hours: uptime.hours }) }}</span>
         </div>

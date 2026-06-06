@@ -46,14 +46,28 @@ describe('nodeRegionKey', () => {
     expect(nodeRegionKey(node)).toBe('de');
   });
 
-  it('falls back to hostname token match', () => {
+  it('matches a flag:xx style tag when geoip is unavailable', () => {
+    const node = makeNode({
+      identity: { node_id: 'x', node_label: 'X', hostname: 'web-us-1', tags: ['flag:jp'] },
+    });
+    expect(nodeRegionKey(node)).toBe('jp');
+  });
+
+  it('does not infer a region from hostname tokens alone', () => {
     const node = makeNode({
       identity: { node_id: 'x', node_label: 'X', hostname: 'web-us-1', tags: [] },
     });
-    expect(nodeRegionKey(node)).toBe('us');
+    expect(nodeRegionKey(node)).toBeNull();
   });
 
-  it('uses geoip country before hostname fallback', () => {
+  it('does not infer a region from node ids alone', () => {
+    const node = makeNode({
+      identity: { node_id: 'jp-edge-1', node_label: 'X', hostname: 'host', tags: [] },
+    });
+    expect(nodeRegionKey(node)).toBeNull();
+  });
+
+  it('uses geoip country even when hostname suggests a different region', () => {
     const node = makeNode({
       identity: { node_id: 'x', node_label: 'X', hostname: 'web-in-1', tags: [] },
       geoip_country: 'US',
@@ -114,6 +128,18 @@ describe('nodePosition', () => {
     expect(x).toBeLessThanOrEqual(0.85);
     expect(y).toBeGreaterThanOrEqual(0.2);
     expect(y).toBeLessThanOrEqual(0.8);
+  });
+
+  it('pins LAN nodes near the local-network corner', () => {
+    const node = makeNode({
+      identity: { node_id: 'lan-1', node_label: 'L', hostname: 'h', tags: [] },
+      geoip_country: 'LAN',
+    });
+    const { x, y } = nodePosition(node);
+    expect(x).toBeGreaterThanOrEqual(0.02);
+    expect(x).toBeLessThanOrEqual(0.14);
+    expect(y).toBeGreaterThanOrEqual(0.02);
+    expect(y).toBeLessThanOrEqual(0.18);
   });
 });
 
