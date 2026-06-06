@@ -358,7 +358,7 @@ pub fn decode_totp_secret(value: &str) -> Option<Vec<u8>> {
         .or_else(|| base32::decode(base32::Alphabet::Rfc4648 { padding: true }, &normalized))
 }
 
-/// 验证 TOTP 码并返回匹配到的当前 30 秒 `time_step`。
+/// 验证 TOTP 码并返回匹配到的 30 秒 `time_step`。
 ///
 /// 调用方收到 `Some(step)` 后需要进一步检查该 step 是否已经被消费过
 /// (`TwoFactorSessions::is_totp_step_used`),以满足 RFC 6238 §5.2 的
@@ -378,8 +378,19 @@ fn verify_totp_step_at(totp_secret: Option<&[u8]>, code: &str, now_step: u64) ->
         return None;
     }
 
-    let expected = totp_code_for_step(secret, now_step);
-    constant_time_compare_bytes(expected.as_bytes(), code.as_bytes()).then_some(now_step)
+    let candidate_steps = now_step
+        .checked_sub(1)
+        .into_iter()
+        .chain(std::iter::once(now_step))
+        .chain(now_step.checked_add(1));
+
+    for step in candidate_steps {
+        let expected = totp_code_for_step(secret, step);
+        if constant_time_compare_bytes(expected.as_bytes(), code.as_bytes()) {
+            return Some(step);
+        }
+    }
+    None
 }
 
 fn totp_code_for_step(secret: &[u8], step: u64) -> String {
@@ -455,20 +466,27 @@ mod tests {
     }
 
     #[test]
-    fn verify_totp_step_accepts_only_current_step() {
+    fn verify_totp_step_accepts_adjacent_clock_drift_steps() {
         let secret = b"12345678901234567890";
         let current_step = (1_000_000..1_000_100)
             .find(|step| {
+                let previous_outside_window = totp_code_for_step(secret, step - 2);
                 let current = totp_code_for_step(secret, *step);
                 let previous = totp_code_for_step(secret, step - 1);
                 let next = totp_code_for_step(secret, step + 1);
-                current != previous && current != next
+                let next_outside_window = totp_code_for_step(secret, step + 2);
+                current != previous
+                    && current != next
+                    && previous_outside_window != previous
+                    && next_outside_window != next
             })
             .expect("fixture should find non-colliding adjacent TOTP codes");
 
         let current_code = totp_code_for_step(secret, current_step);
         let previous_code = totp_code_for_step(secret, current_step - 1);
         let next_code = totp_code_for_step(secret, current_step + 1);
+        let too_old_code = totp_code_for_step(secret, current_step - 2);
+        let too_new_code = totp_code_for_step(secret, current_step + 2);
 
         assert_eq!(
             verify_totp_step_at(Some(secret), &current_code, current_step),
@@ -476,10 +494,18 @@ mod tests {
         );
         assert_eq!(
             verify_totp_step_at(Some(secret), &previous_code, current_step),
-            None
+            Some(current_step - 1)
         );
         assert_eq!(
             verify_totp_step_at(Some(secret), &next_code, current_step),
+            Some(current_step + 1)
+        );
+        assert_eq!(
+            verify_totp_step_at(Some(secret), &too_old_code, current_step),
+            None
+        );
+        assert_eq!(
+            verify_totp_step_at(Some(secret), &too_new_code, current_step),
             None
         );
     }
