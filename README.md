@@ -251,6 +251,8 @@ cargo check
 
 NodeLite 现在提供受保护的 `/metrics` 端点，输出 Prometheus exposition text。它和仪表盘共用只读认证，因此抓取端需要带上同一组 Basic Auth 凭据。
 
+默认 `/metrics` 只导出 server / overview 聚合和少量 node summary 指标，避免大规模集群下 scrape 响应体过大。如果需要按节点导出 CPU、uptime、memory、load、network 等最新快照细节，可在 `server.toml` 的 `[metrics]` 中设置 `export_node_resource_metrics = true`；如果还需要按挂载点导出磁盘指标，再设置 `export_node_disk_metrics = true`。这些开关会按节点数和挂载点数量增加 series 与响应体大小，建议只在确实需要 Prometheus 长期采集这些细节时开启。
+
 先用 `curl` 验证：
 
 ```bash
@@ -330,6 +332,25 @@ HTML 报告输出到 `target/tarpaulin/tarpaulin-report.html`,可用浏览器打
 cargo test -p nodelite-server sanitize::tests
 cargo test -p nodelite-server registry::tests
 ```
+
+### 协议解析 fuzz smoke
+
+`fuzz/` 是独立的 Cargo crate，不属于默认 workspace，因此不会被普通
+`cargo test --workspace` 编译。它覆盖外部 WebSocket 文本帧的 JSON 解析入口：
+`WireMessage`（Agent 通道）和 `BrowserMessage`（浏览器通道）。
+
+常用手动验证命令：
+
+```bash
+cargo test --manifest-path fuzz/Cargo.toml
+cargo run --manifest-path fuzz/Cargo.toml --bin wire_message -- fuzz/corpus/protocol_messages
+cargo run --manifest-path fuzz/Cargo.toml --bin browser_message -- fuzz/corpus/protocol_messages
+cargo run --manifest-path fuzz/Cargo.toml --bin protocol_messages -- 10000
+```
+
+其中 `protocol_messages` 使用固定种子的伪随机输入跑指定迭代数，适合在本地或
+定期任务中做“任意输入不崩溃”的快速 smoke；真实崩溃应以能复现的 corpus 文件
+形式加入 `fuzz/corpus/protocol_messages/`。
 
 ## 交叉编译 Linux x86_64 / aarch64
 
