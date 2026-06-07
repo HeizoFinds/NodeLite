@@ -1,6 +1,5 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -10,6 +9,8 @@ use super::super::validate::validate_registry_file;
 use super::super::{RegistryError, RegistryFile, RegistryResult};
 use super::{MAX_REGISTRY_WRITE_RETRIES, load_registry_file_sync};
 
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
