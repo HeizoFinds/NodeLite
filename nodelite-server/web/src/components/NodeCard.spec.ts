@@ -23,6 +23,8 @@ const FAKE_DICT = {
     'index.node.latency': 'Latency',
     'index.node.load': 'Load',
     'index.node.cpu': 'CPU',
+    'index.node.memory': 'Memory',
+    'index.node.memory_used': 'Memory',
     'common.online': 'Online',
     'common.offline': 'Offline',
     'common.latency_warn': 'High latency',
@@ -31,6 +33,8 @@ const FAKE_DICT = {
     'index.node.latency': '延迟',
     'index.node.load': '负载',
     'index.node.cpu': 'CPU',
+    'index.node.memory': '内存',
+    'index.node.memory_used': '内存',
     'common.online': '在线',
     'common.offline': '离线',
     'common.latency_warn': '高延迟',
@@ -137,7 +141,11 @@ describe('NodeCard', () => {
 
     const node = makeNode({
       identity: { node_id: 'n1', node_label: 'N', hostname: 'h', tags: [] },
-      snapshot: { cpu_usage_percent: 10, load: { one: 0.1 }, memory: { total_bytes: 1, used_bytes: 0 } },
+      snapshot: {
+        cpu_usage_percent: 10,
+        load: { one: 0.1 },
+        memory: { total_bytes: 1, used_bytes: 0 },
+      },
     });
     const wrapper = mount(NodeCard, {
       props: { node },
@@ -150,7 +158,11 @@ describe('NodeCard', () => {
     await wrapper.setProps({
       node: makeNode({
         identity: { node_id: 'n1', node_label: 'N', hostname: 'h', tags: [] },
-        snapshot: { cpu_usage_percent: 55, load: { one: 0.9 }, memory: { total_bytes: 1, used_bytes: 0 } },
+        snapshot: {
+          cpu_usage_percent: 55,
+          load: { one: 0.9 },
+          memory: { total_bytes: 1, used_bytes: 0 },
+        },
       }),
     });
     await flushPromises();

@@ -136,7 +136,7 @@ const localeLabels: Record<SupportedLocale, string> = {
   color: var(--text-primary);
 }
 .main {
-  padding: 24px clamp(20px, 3vw, 36px) 40px;
+  padding: 24px clamp(20px, 2.5vw, 40px) 40px;
   max-width: 2560px;
   width: 100%;
 }
@@ -156,14 +156,15 @@ const localeLabels: Record<SupportedLocale, string> = {
   background: var(--bg-card);
   color: var(--text-secondary);
   border: 1px solid var(--border-soft);
-  border-radius: 10px;
-  padding: 6px 10px;
-  font-size: 12px;
+  border-radius: 8px;
+  min-width: 104px;
+  padding: 8px 12px;
+  font-size: 13px;
 }
 .theme-toggle {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
   border: 1px solid var(--border-soft);
   background: var(--bg-card);
   color: var(--text-secondary);
@@ -176,6 +177,7 @@ const localeLabels: Record<SupportedLocale, string> = {
 .theme-toggle:hover {
   color: var(--text-primary);
   background: var(--bg-card-soft);
+  border-color: var(--border-strong);
 }
 .theme-toggle svg {
   width: 18px;

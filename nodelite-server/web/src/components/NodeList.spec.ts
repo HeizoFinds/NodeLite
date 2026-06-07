@@ -21,11 +21,17 @@ const FAKE_DICT = {
     'index.node.latency': 'Latency',
     'index.node.load': 'Load',
     'index.node.cpu': 'CPU',
+    'index.node.memory': 'Memory',
+    'index.node.memory_used': 'Memory',
     'common.online': 'Online',
     'common.offline': 'Offline',
     'common.latency_warn': 'High latency',
   },
-  'zh-CN': { 'common.waiting_for_data': '等待数据…' },
+  'zh-CN': {
+    'common.waiting_for_data': '等待数据…',
+    'index.node.memory': '内存',
+    'index.node.memory_used': '内存',
+  },
 };
 
 const Stub = defineComponent({ render: () => h('div') });

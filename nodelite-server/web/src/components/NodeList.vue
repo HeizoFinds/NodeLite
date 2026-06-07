@@ -18,11 +18,11 @@ const nodesStore = useNodesStore();
 
 <style scoped>
 .nodes-section {
-  margin-top: 12px;
+  margin-top: 0;
 }
 .node-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   gap: 14px;
 }
 .nodes-empty {
@@ -33,7 +33,7 @@ const nodesStore = useNodesStore();
 }
 @media (min-width: 1920px) {
   .node-grid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 </style>

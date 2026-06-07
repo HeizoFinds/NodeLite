@@ -35,11 +35,7 @@ function repaint(): void {
   const el = canvas.value;
   if (!el) return;
   const geo = geojson.value;
-  paintWorldDotMap(
-    el,
-    geo ? (ctx) => drawGeoJsonMask(ctx, geo) : drawFallbackMask,
-    dotColor(),
-  );
+  paintWorldDotMap(el, geo ? (ctx) => drawGeoJsonMask(ctx, geo) : drawFallbackMask, dotColor());
 }
 
 onMounted(() => {
@@ -95,7 +91,8 @@ watch([geojson, theme], repaint);
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
+  border-radius: 8px;
+  box-shadow: var(--panel-shadow);
   padding: 18px 20px;
 }
 .panel-head {
@@ -106,7 +103,7 @@ watch([geojson, theme], repaint);
   margin-bottom: 14px;
 }
 .panel-title {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -141,11 +138,9 @@ watch([geojson, theme], repaint);
   width: 100%;
   aspect-ratio: 16 / 8;
   min-height: 280px;
-  background:
-    radial-gradient(circle at 20% 30%, rgba(59, 130, 246, 0.09), transparent 55%),
-    radial-gradient(circle at 78% 62%, rgba(34, 197, 94, 0.06), transparent 52%),
-    linear-gradient(135deg, rgba(15, 23, 42, 0.18), rgba(30, 41, 59, 0.04));
-  border-radius: 14px;
+  background: linear-gradient(rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0)), #030303;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
   overflow: hidden;
 }
 @media (max-width: 640px) {
@@ -159,8 +154,8 @@ watch([geojson, theme], repaint);
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px);
   background-size: 5% 10%;
 }
 .map-canvas {
@@ -181,7 +176,7 @@ watch([geojson, theme], repaint);
   border-radius: 50%;
   transform: translate(-50%, -50%);
   box-shadow:
-    0 0 0 3px rgba(0, 0, 0, 0.34),
+    0 0 0 3px rgba(0, 0, 0, 0.75),
     0 0 18px currentColor;
 }
 .map-dot::after {

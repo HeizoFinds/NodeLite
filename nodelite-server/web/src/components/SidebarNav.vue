@@ -70,7 +70,9 @@ const route = useRoute();
         stroke-linecap="round"
         stroke-linejoin="round"
       >
-        <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5" />
+        <path
+          d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5"
+        />
         <path d="M9 17a3 3 0 0 0 6 0" />
       </svg>
     </RouterLink>
@@ -116,10 +118,10 @@ const route = useRoute();
   height: 100vh;
 }
 .brand {
-  width: 64px;
-  height: 64px;
+  width: 58px;
+  height: 58px;
   display: block;
-  border-radius: 18px;
+  border-radius: 8px;
   overflow: hidden;
   background-color: transparent;
   background-image: var(--brand-logo);
@@ -133,7 +135,7 @@ const route = useRoute();
   height: 44px;
   display: grid;
   place-items: center;
-  border-radius: 12px;
+  border-radius: 8px;
   border: 0;
   background: transparent;
   color: var(--text-muted);
@@ -147,8 +149,9 @@ const route = useRoute();
   background: var(--bg-card-soft);
 }
 .nav-button.active {
-  color: var(--accent-blue);
-  background: var(--accent-blue-soft);
+  color: var(--accent-green);
+  background: var(--bg-card-soft);
+  box-shadow: inset 0 0 0 1px rgba(37, 228, 135, 0.16);
 }
 .nav-button[disabled] {
   opacity: 0.4;

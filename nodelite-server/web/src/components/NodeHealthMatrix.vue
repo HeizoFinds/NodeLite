@@ -5,19 +5,19 @@ import type { NodeListItem } from '@/api';
 
 const nodesStore = useNodesStore();
 
-type Tone = 'muted' | 'green' | 'greenSoft' | 'yellow' | 'orange' | 'red';
+type Tone = 'muted' | 'green' | 'yellow' | 'orange' | 'red';
 
 interface MatrixRow {
   id: string;
   label: string;
-  latencyText: string;
-  latencyTone: Tone;
   loadText: string;
   loadTone: Tone;
   cpuText: string;
   cpuTone: Tone;
   memoryText: string;
   memoryTone: Tone;
+  status: 'online' | 'latency' | 'offline';
+  statusLabelKey: string;
 }
 
 const PLACEHOLDER = '—';
@@ -37,19 +37,28 @@ function toMatrixRow(node: NodeListItem): MatrixRow {
   const cpu = node.snapshot?.cpu_usage_percent ?? null;
   const load = node.snapshot?.load.one ?? null;
   const memory = memoryPercent(node);
-  const latency = node.latency_ms;
+  const status = node.online
+    ? node.latency_ms != null && node.latency_ms >= 200
+      ? 'latency'
+      : 'online'
+    : 'offline';
 
   return {
     id: node.identity.node_id,
     label: labelFor(node),
-    latencyText: latency == null ? PLACEHOLDER : String(Math.round(latency)),
-    latencyTone: latencyTone(latency),
     loadText: loadText(load),
     loadTone: loadTone(load),
     cpuText: percentText(cpu),
     cpuTone: usageTone(cpu),
     memoryText: percentText(memory),
     memoryTone: usageTone(memory),
+    status,
+    statusLabelKey:
+      status === 'offline'
+        ? 'common.offline'
+        : status === 'latency'
+          ? 'common.latency_warn'
+          : 'common.online',
   };
 }
 
@@ -65,15 +74,6 @@ function percentText(value: number | null): string {
 
 function loadText(value: number | null): string {
   return value == null ? PLACEHOLDER : value.toFixed(2);
-}
-
-function latencyTone(value: number | null): Tone {
-  if (value == null) return 'muted';
-  if (value < 60) return 'green';
-  if (value < 120) return 'greenSoft';
-  if (value < 200) return 'yellow';
-  if (value < 350) return 'orange';
-  return 'red';
 }
 
 function loadTone(value: number | null): Tone {
@@ -111,21 +111,16 @@ function usageTone(value: number | null): Tone {
     <table v-else class="matrix-table">
       <thead>
         <tr>
-          <th class="row-head" />
-          <th>{{ $t('index.matrix.col_current') }}</th>
-          <th>{{ $t('index.node.load') }}</th>
+          <th class="row-head">{{ $t('index.matrix.col_node') }}</th>
+          <th>{{ $t('index.matrix.col_current_load') }}</th>
           <th>{{ $t('index.node.cpu') }}</th>
           <th>{{ $t('index.node.memory') }}</th>
+          <th>{{ $t('index.matrix.col_status') }}</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="row.id" data-test="health-matrix-row">
           <td class="row-head">{{ row.label }}</td>
-          <td>
-            <div class="matrix-cell" :class="row.latencyTone" data-test="health-matrix-latency">
-              {{ row.latencyText }}
-            </div>
-          </td>
           <td>
             <div class="matrix-cell" :class="row.loadTone" data-test="health-matrix-load">
               {{ row.loadText }}
@@ -141,6 +136,12 @@ function usageTone(value: number | null): Tone {
               {{ row.memoryText }}
             </div>
           </td>
+          <td>
+            <div class="status-cell" :class="row.status" data-test="health-matrix-status">
+              <span class="status-dot" />
+              <span>{{ $t(row.statusLabelKey) }}</span>
+            </div>
+          </td>
         </tr>
       </tbody>
     </table>
@@ -151,8 +152,10 @@ function usageTone(value: number | null): Tone {
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
+  border-radius: 8px;
+  box-shadow: var(--panel-shadow);
   padding: 18px 20px;
+  min-height: 100%;
 }
 .panel-head {
   display: flex;
@@ -181,7 +184,7 @@ function usageTone(value: number | null): Tone {
   align-items: center;
   border: 0;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--accent-blue);
   cursor: pointer;
   font: inherit;
   font-size: 12px;
@@ -197,7 +200,8 @@ function usageTone(value: number | null): Tone {
 }
 .matrix-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0 8px;
   table-layout: fixed;
   font-size: 12px;
 }
@@ -209,7 +213,7 @@ function usageTone(value: number | null): Tone {
   text-align: center;
 }
 .matrix-table th.row-head {
-  width: 28%;
+  width: 24%;
   padding-left: 4px;
   text-align: left;
 }
@@ -227,6 +231,7 @@ function usageTone(value: number | null): Tone {
 .matrix-cell {
   min-width: 0;
   border-radius: 6px;
+  border: 1px solid transparent;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
   font-weight: 500;
@@ -238,24 +243,49 @@ function usageTone(value: number | null): Tone {
   color: var(--text-dim);
 }
 .matrix-cell.green {
-  background: rgba(34, 197, 94, 0.18);
-  color: #22c55e;
-}
-.matrix-cell.greenSoft {
-  background: rgba(34, 197, 94, 0.1);
-  color: #86efac;
+  background: var(--accent-green-soft);
+  border-color: rgba(37, 228, 135, 0.16);
+  color: var(--accent-green);
 }
 .matrix-cell.yellow {
-  background: rgba(234, 179, 8, 0.18);
-  color: #facc15;
+  background: var(--accent-yellow-soft);
+  border-color: rgba(245, 197, 66, 0.18);
+  color: var(--accent-yellow);
 }
 .matrix-cell.orange {
-  background: rgba(249, 115, 22, 0.18);
-  color: #fb923c;
+  background: rgba(249, 115, 22, 0.16);
+  border-color: rgba(249, 115, 22, 0.18);
+  color: #ff9d42;
 }
 .matrix-cell.red {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
+  background: var(--accent-red-soft);
+  border-color: rgba(255, 77, 109, 0.18);
+  color: var(--accent-red);
+}
+.status-cell {
+  align-items: center;
+  color: var(--text-secondary);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 7px;
+  justify-content: center;
+  min-width: 76px;
+  white-space: nowrap;
+}
+.status-dot {
+  border-radius: 50%;
+  box-shadow: 0 0 14px currentColor;
+  height: 8px;
+  width: 8px;
+}
+.status-cell.online {
+  color: var(--accent-green);
+}
+.status-cell.latency {
+  color: var(--accent-yellow);
+}
+.status-cell.offline {
+  color: var(--accent-red);
 }
 @media (max-width: 480px) {
   .panel {
