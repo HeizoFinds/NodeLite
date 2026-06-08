@@ -42,6 +42,7 @@ describe('ChartModal', () => {
     expect(wrapper.find('[data-test="chart-modal"]').exists()).toBe(true);
     expect(wrapper.find('.chart-modal__title').text()).toBe('CPU');
     expect(wrapper.find('[data-test="metric-chart"]').exists()).toBe(true);
+    expect(wrapper.findComponent(MetricChart).props('height')).toBe(260);
 
     await wrapper.find('[data-test="chart-modal-close"]').trigger('click');
     expect(wrapper.emitted('close')).toHaveLength(1);

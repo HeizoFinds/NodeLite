@@ -296,6 +296,17 @@ describe('NodeDetailView', () => {
     expect(wrapper.find('[data-test="chart-modal"]').exists()).toBe(false);
   });
 
+  it('closes the zoom modal when leaving the overview tab', async () => {
+    const { wrapper, router } = await mountDetail('srv-1');
+    await wrapper.find('[data-test="zoom-cpu"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="chart-modal"]').exists()).toBe(true);
+
+    await router.replace({ hash: '#network' });
+    await flushPromises();
+    expect(wrapper.find('[data-test="chart-modal"]').exists()).toBe(false);
+  });
+
   it('falls back to overview for the old monitor hash', async () => {
     const { wrapper, router } = await mountDetail('srv-1');
     await router.replace({ hash: '#monitor' });

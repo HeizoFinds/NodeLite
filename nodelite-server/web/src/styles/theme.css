@@ -85,6 +85,13 @@
   --chart-load-fifteen: #a1a1aa;
 }
 
+html.theme-switching,
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: none !important;
+}
+
 * {
   box-sizing: border-box;
 }

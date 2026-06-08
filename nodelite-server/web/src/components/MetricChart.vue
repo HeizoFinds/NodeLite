@@ -85,7 +85,7 @@ const { model, hover, onPointerMove, onPointerLeave } = useChart(
   <div
     ref="containerRef"
     class="metric-chart"
-    :style="{ minHeight: `${height}px` }"
+    :style="{ height: `${height}px`, minHeight: `${height}px` }"
     data-test="metric-chart"
     @pointermove="onPointerMove"
     @pointerleave="onPointerLeave"

@@ -106,12 +106,16 @@ onMounted(() => {
 
 // Navigating between nodes (same component, new :id) reloads.
 watch(nodeId, (id) => {
+  closeZoom();
   if (id) void store.load(id);
   ensureTabData();
 });
 
 // Switching tabs / changing the monitor window lazily loads that data.
-watch([activeTab, selection.windowHours], () => ensureTabData());
+watch([activeTab, selection.windowHours], ([tab]) => {
+  if (tab !== 'overview') closeZoom();
+  ensureTabData();
+});
 
 usePolling(() => {
   void store.refresh();
