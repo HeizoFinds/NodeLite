@@ -43,6 +43,7 @@ pub(crate) async fn settings(State(state): State<AppState>) -> impl IntoResponse
                     .token_expires_at
                     .map(|expires_at| (expires_at - now).num_seconds()),
                 service_expires_at: node.service_expires_at,
+                service_unlimited: node.service_unlimited,
                 renewal_price: node.renewal_price,
             }
         })

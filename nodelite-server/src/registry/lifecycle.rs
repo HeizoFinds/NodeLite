@@ -141,11 +141,17 @@ impl NodeRegistry {
         &self,
         node_id: &str,
         service_expires_at: Option<DateTime<Utc>>,
+        service_unlimited: bool,
         renewal_price: Option<String>,
     ) -> RegistryResult<RegisteredNode> {
         validate_identifier("node_id", node_id).map_err(RegistryError::validation)?;
         let renewal_price =
             sanitize_renewal_price(renewal_price).map_err(RegistryError::validation)?;
+        let service_expires_at = if service_unlimited {
+            None
+        } else {
+            service_expires_at
+        };
         let node_id = node_id.to_string();
         let path = Arc::clone(&self.path);
         let (node, file) = mutate_registry_file(path.as_ref(), move |file| {
@@ -153,6 +159,7 @@ impl NodeRegistry {
                 return Err(RegistryError::NodeNotFound(node_id.clone()));
             };
             node.service_expires_at = service_expires_at;
+            node.service_unlimited = service_unlimited;
             node.renewal_price = renewal_price.clone();
             super::validate::validate_registered_node(node)?;
             Ok((node.clone(), true))

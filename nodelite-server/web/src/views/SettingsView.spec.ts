@@ -61,6 +61,8 @@ const FAKE_DICT = {
     'settings.tokens.expires_at': 'Expires',
     'settings.tokens.remaining': 'Remaining',
     'settings.tokens.service_expires_at': 'Service expiry',
+    'settings.tokens.service_unlimited': 'Unlimited',
+    'settings.tokens.service_unlimited_short': 'No limit',
     'settings.tokens.renewal_price': 'Renewal price',
     'settings.tokens.renewal_price_placeholder': '$5/mo',
     'settings.tokens.actions': 'Actions',

@@ -188,6 +188,7 @@ export interface SettingsAgentToken {
   token_expires_at: string | null;
   token_expires_in_secs: number | null;
   service_expires_at: string | null;
+  service_unlimited: boolean;
   renewal_price: string | null;
 }
 
@@ -224,6 +225,7 @@ export interface ReauthPayload {
 /** POST /api/nodes/{id}/service-meta */
 export interface UpdateNodeServiceMetadataRequest {
   service_expires_at: string | null;
+  service_unlimited: boolean;
   renewal_price: string | null;
 }
 

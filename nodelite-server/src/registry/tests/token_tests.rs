@@ -92,6 +92,7 @@ fn token_is_expired_at_exact_expiry_moment() {
         created_at: expires_at - ChronoDuration::minutes(5),
         token_expires_at: Some(expires_at),
         service_expires_at: None,
+        service_unlimited: false,
         renewal_price: None,
     };
 

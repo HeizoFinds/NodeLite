@@ -106,9 +106,16 @@ pub struct RegisteredNode {
     /// 运营侧记录的服务器/套餐到期时间,仅用于设置页展示与提醒。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_expires_at: Option<DateTime<Utc>>,
+    /// 运营侧标记的自持有/无限期服务器,为 true 时不展示到期倒计时。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub service_unlimited: bool,
     /// 运营侧记录的续费价格,例如 "¥30/月" 或 "$5/mo"。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub renewal_price: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// 一次成功的 token 验证 / 颁发结果:返回身份与 token 状态快照,

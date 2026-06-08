@@ -23,7 +23,7 @@ const settingsStore = useSettingsStore();
 const reauth = reactive({ current_password: '', code: '' });
 const message = reactive<{ state: 'ok' | 'error' | null; text: string }>({ state: null, text: '' });
 const saving = reactive({ value: false });
-const serviceDraft = reactive({ serviceDate: '', renewalPrice: '' });
+const serviceDraft = reactive({ serviceDate: '', serviceUnlimited: false, renewalPrice: '' });
 const serviceMessage = reactive<{ state: 'ok' | 'error' | null; text: string }>({
   state: null,
   text: '',
@@ -72,6 +72,7 @@ watch(
   agent,
   (value) => {
     serviceDraft.serviceDate = dateInputValue(value?.service_expires_at);
+    serviceDraft.serviceUnlimited = value?.service_unlimited ?? false;
     serviceDraft.renewalPrice = value?.renewal_price ?? '';
   },
   { immediate: true },
@@ -84,7 +85,10 @@ async function saveServiceMetadata(): Promise<void> {
   try {
     const renewalPrice = serviceDraft.renewalPrice.trim();
     const resp = await apiClient.updateNodeServiceMetadata(props.nodeId, {
-      service_expires_at: serviceExpiresAt(serviceDraft.serviceDate),
+      service_expires_at: serviceDraft.serviceUnlimited
+        ? null
+        : serviceExpiresAt(serviceDraft.serviceDate),
+      service_unlimited: serviceDraft.serviceUnlimited,
       renewal_price: renewalPrice || null,
     });
     await settingsStore.refresh();
@@ -163,8 +167,20 @@ async function refresh(): Promise<void> {
               v-model="serviceDraft.serviceDate"
               class="field-input"
               type="date"
+              :disabled="serviceDraft.serviceUnlimited"
               data-test="node-service-expiry-input"
             />
+          </label>
+          <label class="field field--check">
+            <span>{{ t('node.settings.service_unlimited') }}</span>
+            <span class="check-row">
+              <input
+                v-model="serviceDraft.serviceUnlimited"
+                type="checkbox"
+                data-test="node-service-unlimited-input"
+              />
+              <span>{{ t('node.settings.service_unlimited_hint') }}</span>
+            </span>
           </label>
           <label class="field">
             <span>{{ t('node.settings.renewal_price') }}</span>
@@ -285,7 +301,7 @@ async function refresh(): Promise<void> {
 }
 .service-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 0.65fr) minmax(0, 1fr) auto;
   gap: 12px;
   align-items: end;
 }
@@ -311,6 +327,26 @@ async function refresh(): Promise<void> {
 .field-input:focus {
   border-color: var(--border-strong);
   outline: none;
+}
+.field-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.field--check {
+  color: var(--text-muted);
+}
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.check-row input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent-green);
 }
 .service-save {
   min-height: 36px;

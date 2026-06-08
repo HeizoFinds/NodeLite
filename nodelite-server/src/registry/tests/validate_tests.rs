@@ -13,6 +13,7 @@ fn validate_registered_node_rejects_oversized_tags() {
         created_at: Utc::now(),
         token_expires_at: None,
         service_expires_at: None,
+        service_unlimited: false,
         renewal_price: None,
     };
     node.tags = vec!["x".repeat(MAX_NODE_TAG_BYTES + 1)];
@@ -33,6 +34,7 @@ fn validate_registered_node_rejects_invalid_renewal_price() {
         created_at: Utc::now(),
         token_expires_at: None,
         service_expires_at: None,
+        service_unlimited: false,
         renewal_price: Some("bad\nprice".to_string()),
     };
 

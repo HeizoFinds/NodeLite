@@ -60,6 +60,7 @@ export function makeSettings(overrides: Partial<SettingsResponse> = {}): Setting
         token_expires_at: '2026-12-01T00:00:00Z',
         token_expires_in_secs: 1_000_000,
         service_expires_at: null,
+        service_unlimited: false,
         renewal_price: null,
       },
     ],

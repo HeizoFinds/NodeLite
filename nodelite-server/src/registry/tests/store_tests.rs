@@ -138,21 +138,75 @@ fn update_service_metadata_persists_display_fields() {
         let expires_at = Utc.with_ymd_and_hms(2026, 12, 31, 0, 0, 0).unwrap();
 
         let updated = registry
-            .update_service_metadata("hk-01", Some(expires_at), Some("  $5/mo  ".to_string()))
+            .update_service_metadata(
+                "hk-01",
+                Some(expires_at),
+                false,
+                Some("  $5/mo  ".to_string()),
+            )
             .await
             .expect("service metadata should save");
         assert_eq!(updated.service_expires_at, Some(expires_at));
+        assert!(!updated.service_unlimited);
         assert_eq!(updated.renewal_price.as_deref(), Some("$5/mo"));
 
         let nodes = registry.list_registered_nodes().await;
         assert_eq!(nodes[0].service_expires_at, Some(expires_at));
+        assert!(!nodes[0].service_unlimited);
         assert_eq!(nodes[0].renewal_price.as_deref(), Some("$5/mo"));
 
         let stored = std::fs::read_to_string(&path).expect("registry should be readable");
         let parsed: RegistryFile =
             serde_json::from_str(&stored).expect("stored registry should parse");
         assert_eq!(parsed.nodes[0].service_expires_at, Some(expires_at));
+        assert!(!parsed.nodes[0].service_unlimited);
         assert_eq!(parsed.nodes[0].renewal_price.as_deref(), Some("$5/mo"));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&temp_dir);
+    });
+}
+
+#[test]
+fn update_service_metadata_can_mark_service_unlimited() {
+    let runtime = Runtime::new().expect("runtime should build");
+    runtime.block_on(async {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("nodelite-service-unlimited-test-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+        let path = temp_dir.join("server.json");
+
+        issue_node(
+            &path,
+            IssueNodeRequest {
+                node_id: "hk-01".to_string(),
+                node_label: Some("Hong Kong 01".to_string()),
+                tags: Vec::new(),
+            },
+        )
+        .await
+        .expect("node should be issued");
+        let registry = NodeRegistry::load(&path)
+            .await
+            .expect("registry should load");
+        let expires_at = Utc.with_ymd_and_hms(2026, 12, 31, 0, 0, 0).unwrap();
+
+        let updated = registry
+            .update_service_metadata("hk-01", Some(expires_at), true, None)
+            .await
+            .expect("service metadata should save");
+        assert_eq!(updated.service_expires_at, None);
+        assert!(updated.service_unlimited);
+
+        let stored = std::fs::read_to_string(&path).expect("registry should be readable");
+        let parsed: RegistryFile =
+            serde_json::from_str(&stored).expect("stored registry should parse");
+        assert_eq!(parsed.nodes[0].service_expires_at, None);
+        assert!(parsed.nodes[0].service_unlimited);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&temp_dir);

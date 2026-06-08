@@ -163,7 +163,7 @@ pub(crate) fn small_json_write_requests() -> [(&'static str, Option<&'static str
         (
             "/api/nodes/test-node/service-meta",
             Some(TEST_BASIC_AUTH_HEADER),
-            r#"{"service_expires_at":null,"renewal_price":"$5/mo"}"#,
+            r#"{"service_expires_at":null,"service_unlimited":false,"renewal_price":"$5/mo"}"#,
         ),
         (
             "/api/settings/password",

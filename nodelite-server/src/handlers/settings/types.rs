@@ -51,6 +51,7 @@ pub(crate) struct SettingsAgentToken {
     pub(crate) token_expires_at: Option<DateTime<Utc>>,
     pub(crate) token_expires_in_secs: Option<i64>,
     pub(crate) service_expires_at: Option<DateTime<Utc>>,
+    pub(crate) service_unlimited: bool,
     pub(crate) renewal_price: Option<String>,
 }
 
@@ -58,6 +59,8 @@ pub(crate) struct SettingsAgentToken {
 pub(crate) struct UpdateNodeServiceMetadataRequest {
     #[serde(default)]
     pub(crate) service_expires_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub(crate) service_unlimited: bool,
     #[serde(default)]
     pub(crate) renewal_price: Option<String>,
 }

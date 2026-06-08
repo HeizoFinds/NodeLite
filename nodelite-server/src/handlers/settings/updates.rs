@@ -184,7 +184,12 @@ pub(crate) async fn update_node_service_metadata(
 ) -> Response {
     match state
         .registry
-        .update_service_metadata(&node_id, request.service_expires_at, request.renewal_price)
+        .update_service_metadata(
+            &node_id,
+            request.service_expires_at,
+            request.service_unlimited,
+            request.renewal_price,
+        )
         .await
     {
         Ok(_) => (

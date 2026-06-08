@@ -37,6 +37,7 @@ fn legacy_node(
         created_at: Utc::now(),
         token_expires_at,
         service_expires_at: None,
+        service_unlimited: false,
         renewal_price: None,
     }
 }

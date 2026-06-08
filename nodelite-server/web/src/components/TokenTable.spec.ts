@@ -26,6 +26,8 @@ const FAKE_DICT = {
     'settings.tokens.expires_at': 'Expires at',
     'settings.tokens.remaining': 'Remaining',
     'settings.tokens.service_expires_at': 'Service expiry',
+    'settings.tokens.service_unlimited': 'Unlimited',
+    'settings.tokens.service_unlimited_short': 'No limit',
     'settings.tokens.renewal_price': 'Renewal price',
     'settings.tokens.renewal_price_placeholder': '$5/mo',
     'settings.tokens.actions': 'Actions',
@@ -51,7 +53,7 @@ function agent(over: Partial<SettingsAgentToken>): SettingsAgentToken {
   return {
     node_id: 'n', node_label: 'N', online: true, agent_version: '1.0',
     remote_ip: '10.0.0.1', tags: [], token_expires_at: '2026-12-01T00:00:00Z',
-    token_expires_in_secs: 1_000_000, service_expires_at: null, renewal_price: null, ...over,
+    token_expires_in_secs: 1_000_000, service_expires_at: null, service_unlimited: false, renewal_price: null, ...over,
   };
 }
 
@@ -111,9 +113,25 @@ describe('TokenTable', () => {
 
     expect(mockUpdateMeta).toHaveBeenCalledWith('a', {
       service_expires_at: '2027-01-15T00:00:00Z',
+      service_unlimited: false,
       renewal_price: '$5/mo',
     });
     expect(wrapper.emitted('saved')).toHaveLength(1);
     expect(wrapper.find('[data-test="service-meta-message"]').text()).toBe('Saved');
+  });
+
+  it('can save an unlimited service term', async () => {
+    const wrapper = mountTable([agent({ node_id: 'a' })]);
+
+    await wrapper.find('[data-test="service-expiry-input"]').setValue('2027-01-15');
+    await wrapper.find('[data-test="service-unlimited-input"]').setValue(true);
+    await wrapper.find('[data-test="service-meta-save"]').trigger('click');
+    await flushPromises();
+
+    expect(mockUpdateMeta).toHaveBeenCalledWith('a', {
+      service_expires_at: null,
+      service_unlimited: true,
+      renewal_price: null,
+    });
   });
 });

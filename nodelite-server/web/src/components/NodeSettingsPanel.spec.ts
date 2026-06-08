@@ -35,6 +35,8 @@ const FAKE_DICT = {
     'node.settings.token_expires_in_hours': '{hours} hours',
     'node.settings.service_meta': 'Service Renewal',
     'node.settings.service_expires_at': 'Service expiry',
+    'node.settings.service_unlimited': 'Unlimited',
+    'node.settings.service_unlimited_hint': 'No limit',
     'node.settings.renewal_price': 'Renewal price',
     'node.settings.service_meta_save': 'Save',
     'node.settings.service_meta_saving': 'Saving…',
@@ -72,6 +74,7 @@ describe('NodeSettingsPanel', () => {
             token_expires_at: '2026-06-15T00:00:00Z',
             token_expires_in_secs: 1296000, // 15 days
             service_expires_at: '2026-12-31T00:00:00Z',
+            service_unlimited: false,
             renewal_price: '$4/mo',
           },
           {
@@ -84,6 +87,7 @@ describe('NodeSettingsPanel', () => {
             token_expires_at: null,
             token_expires_in_secs: null,
             service_expires_at: null,
+            service_unlimited: false,
             renewal_price: null,
           },
         ],
@@ -180,10 +184,25 @@ describe('NodeSettingsPanel', () => {
 
     expect(mockUpdateMeta).toHaveBeenCalledWith('node-a', {
       service_expires_at: '2027-01-15T00:00:00Z',
+      service_unlimited: false,
       renewal_price: '$5/mo',
     });
     expect(mockSettings).toHaveBeenCalledTimes(2);
     expect(wrapper.find('[data-test="settings-message"]').text()).toBe('Saved');
+  });
+
+  it('saves unlimited service metadata from the node tab', async () => {
+    const wrapper = await mountPanel('node-a');
+    await wrapper.find('[data-test="node-service-expiry-input"]').setValue('2027-01-15');
+    await wrapper.find('[data-test="node-service-unlimited-input"]').setValue(true);
+    await wrapper.find('[data-test="node-service-meta-save"]').trigger('click');
+    await flushPromises();
+
+    expect(mockUpdateMeta).toHaveBeenCalledWith('node-a', {
+      service_expires_at: null,
+      service_unlimited: true,
+      renewal_price: '$4/mo',
+    });
   });
 
   it('surfaces the server error message when refresh fails', async () => {

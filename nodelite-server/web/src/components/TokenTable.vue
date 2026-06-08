@@ -12,6 +12,7 @@ const { t, locale } = useI18n();
 
 interface ServiceDraft {
   serviceDate: string;
+  serviceUnlimited: boolean;
   renewalPrice: string;
   saving: boolean;
   state: 'ok' | 'error' | null;
@@ -23,6 +24,7 @@ const drafts = reactive<Record<string, ServiceDraft>>({});
 function draftFromAgent(agent: SettingsAgentToken, existing?: ServiceDraft): ServiceDraft {
   return {
     serviceDate: dateInputValue(agent.service_expires_at),
+    serviceUnlimited: agent.service_unlimited,
     renewalPrice: agent.renewal_price ?? '',
     saving: false,
     state: existing?.state ?? null,
@@ -85,7 +87,8 @@ async function saveServiceMetadata(nodeId: string): Promise<void> {
   try {
     const renewalPrice = draft.renewalPrice.trim();
     const resp = await apiClient.updateNodeServiceMetadata(nodeId, {
-      service_expires_at: serviceExpiresAt(draft.serviceDate),
+      service_expires_at: draft.serviceUnlimited ? null : serviceExpiresAt(draft.serviceDate),
+      service_unlimited: draft.serviceUnlimited,
       renewal_price: renewalPrice || null,
     });
     draft.renewalPrice = renewalPrice;
@@ -145,6 +148,7 @@ const rows = computed(() =>
           <th>{{ t('settings.tokens.expires_at') }}</th>
           <th class="numeric">{{ t('settings.tokens.remaining') }}</th>
           <th>{{ t('settings.tokens.service_expires_at') }}</th>
+          <th>{{ t('settings.tokens.service_unlimited') }}</th>
           <th>{{ t('settings.tokens.renewal_price') }}</th>
           <th class="actions">{{ t('settings.tokens.actions') }}</th>
         </tr>
@@ -170,8 +174,19 @@ const rows = computed(() =>
               v-model="row.draft.serviceDate"
               class="meta-input"
               type="date"
+              :disabled="row.draft.serviceUnlimited"
               data-test="service-expiry-input"
             />
+          </td>
+          <td :data-label="t('settings.tokens.service_unlimited')">
+            <label class="meta-check">
+              <input
+                v-model="row.draft.serviceUnlimited"
+                type="checkbox"
+                data-test="service-unlimited-input"
+              />
+              <span>{{ t('settings.tokens.service_unlimited_short') }}</span>
+            </label>
           </td>
           <td :data-label="t('settings.tokens.renewal_price')">
             <input
@@ -322,6 +337,23 @@ const rows = computed(() =>
 .meta-input:focus {
   border-color: var(--border-strong);
   outline: none;
+}
+.meta-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.meta-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.meta-check input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-green);
 }
 .meta-save {
   min-width: 64px;
