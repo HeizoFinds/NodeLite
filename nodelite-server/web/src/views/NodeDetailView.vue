@@ -2,11 +2,10 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
-import NodeInfoPanel from '@/components/NodeInfoPanel.vue';
+import NodeHardwarePanel from '@/components/NodeHardwarePanel.vue';
 import NodeOverviewMonitor, {
   type OverviewMonitorMetric,
 } from '@/components/NodeOverviewMonitor.vue';
-import NodeDisks from '@/components/NodeDisks.vue';
 import MetricChart from '@/components/MetricChart.vue';
 import ChartModal from '@/components/ChartModal.vue';
 import LogPanel from '@/components/LogPanel.vue';
@@ -314,12 +313,7 @@ const modalConfig = computed(() => {
           </template>
 
           <template v-else-if="activeTab === 'hardware'">
-            <div class="overview-grid">
-              <NodeInfoPanel :node="node" />
-            </div>
-            <article class="panel">
-              <NodeDisks :node="node" />
-            </article>
+            <NodeHardwarePanel :node="node" />
           </template>
 
           <LogPanel
@@ -415,17 +409,6 @@ const modalConfig = computed(() => {
   opacity: 0.4;
   cursor: not-allowed;
 }
-.placeholder {
-  color: var(--text-muted);
-  font-size: 13px;
-}
-.overview-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 14px;
-  margin-bottom: 14px;
-  align-items: start;
-}
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
@@ -517,10 +500,5 @@ const modalConfig = computed(() => {
 }
 .error-state__button:hover {
   opacity: 0.9;
-}
-@media (max-width: 880px) {
-  .overview-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 </style>

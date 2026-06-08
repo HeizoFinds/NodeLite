@@ -62,6 +62,12 @@ const FAKE_DICT = {
     'node.memory_usage': 'Memory Usage',
     'node.network_traffic': 'Network Traffic',
     'node.latency_history': 'RTT',
+    'node.mounted_disks': 'Mounted Disks',
+    'node.stats.cpu': 'CPU',
+    'node.stats.memory': 'Memory',
+    'node.stats.swap': 'Swap',
+    'node.stats.load': 'Load 1/5/15',
+    'node.stats.latency': 'Latency',
     'node.chart.average': 'Avg {value}',
     'node.chart.zoom': 'Open enlarged chart',
     'node.clip.on': 'Clip Spikes: On',
@@ -74,6 +80,19 @@ const FAKE_DICT = {
     'node.preset.last_3d': '3d',
     'node.preset.last_7d': '7d',
     'node.preset.last_14d': '14d',
+    'node.hardware.system': 'System',
+    'node.hardware.storage': 'Storage',
+    'node.hardware.filesystems': 'Filesystem Distribution',
+    'node.hardware.total': 'Total',
+    'node.hardware.used': 'Used',
+    'node.hardware.available': 'Available',
+    'node.hardware.cores': 'cores',
+    'node.hardware.load_hint': '1 / 5 / 15 minute windows',
+    'node.hardware.partitions': 'Partitions',
+    'node.hardware.partition_count': '{count} partitions',
+    'node.hardware.health.title': 'Hardware Health',
+    'node.hardware.health.summary': 'Signal Summary',
+    'node.hardware.health.status': 'Node Status',
     'node.logs.empty': 'No logs.',
     'node.logs.load_failed': 'Failed: {error}',
     'node.logs.level_info': 'Info',
@@ -231,8 +250,10 @@ describe('NodeDetailView', () => {
     const { wrapper, router } = await mountDetail('srv-1');
     await router.replace({ hash: '#hardware' });
     await flushPromises();
+    expect(wrapper.find('[data-test="node-hardware-panel"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="node-disks"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="node-info-panel"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="hardware-health-card"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="node-info-panel"]').exists()).toBe(false);
   });
 
   it('loads a new high-res history window when an overview preset is selected', async () => {
