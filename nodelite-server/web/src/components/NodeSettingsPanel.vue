@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue';
+import { computed, onMounted, reactive } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ReauthFields from '@/components/ReauthFields.vue';
 import SettingsMessage from '@/components/SettingsMessage.vue';
@@ -27,6 +27,12 @@ const saving = reactive({ value: false });
 const agent = computed(() =>
   settingsStore.data?.agents.find((a) => a.node_id === props.nodeId),
 );
+
+onMounted(() => {
+  if (!settingsStore.data && !settingsStore.loading) {
+    void settingsStore.load();
+  }
+});
 
 const expiryLabel = computed(() => {
   const a = agent.value;

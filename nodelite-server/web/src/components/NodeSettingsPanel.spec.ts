@@ -98,12 +98,14 @@ describe('NodeSettingsPanel', () => {
     vi.clearAllMocks();
   });
 
-  async function mountPanel(nodeId: string) {
+  async function mountPanel(nodeId: string, options: { preload?: boolean } = {}) {
     const pinia = createPinia();
     setActivePinia(pinia);
     const { useSettingsStore } = await import('@/stores/settings');
     const store = useSettingsStore();
-    await store.load();
+    if (options.preload !== false) {
+      await store.load();
+    }
     const wrapper = mount(NodeSettingsPanel, {
       props: { nodeId },
       global: { plugins: [pinia, getI18n()] },
@@ -111,6 +113,15 @@ describe('NodeSettingsPanel', () => {
     await flushPromises();
     return wrapper;
   }
+
+  it('loads token info when the settings store is empty', async () => {
+    const wrapper = await mountPanel('node-a', { preload: false });
+    const rows = wrapper.findAll('.info-row');
+
+    expect(mockSettings).toHaveBeenCalledTimes(1);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.text()).toContain('15 days');
+  });
 
   it('renders token info for the matched node', async () => {
     const wrapper = await mountPanel('node-a');
