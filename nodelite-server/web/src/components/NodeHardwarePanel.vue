@@ -213,8 +213,10 @@ const healthRows = computed(() => [
             :style="{ '--pct': `${clampPercent(diskPercent)}%` }"
             :aria-label="percentText(diskPercent)"
           >
-            <strong>{{ percentText(diskPercent) }}</strong>
-            <span>{{ t('node.hardware.used') }}</span>
+            <div class="donut__content">
+              <strong>{{ percentText(diskPercent) }}</strong>
+              <span>{{ t('node.hardware.used') }}</span>
+            </div>
           </div>
           <div class="storage-stats">
             <span>{{ t('node.hardware.total') }}</span>
@@ -284,17 +286,22 @@ const healthRows = computed(() => [
             <span>{{ t('node.disk.usage') }}</span>
             <span>{{ t('node.disk.capacity') }}</span>
           </div>
-          <div v-for="row in diskRows" :key="`${row.device}:${row.mount}`" class="disk-row" data-test="disk-row">
-            <span class="device">{{ row.device }}</span>
-            <span>{{ row.mount }}</span>
-            <span><em>{{ row.fs }}</em></span>
-            <span class="usage-cell">
+          <div
+            v-for="row in diskRows"
+            :key="`${row.device}:${row.mount}`"
+            class="disk-row"
+            data-test="disk-row"
+          >
+            <span class="device" :data-label="t('node.disk.device')">{{ row.device }}</span>
+            <span :data-label="t('node.disk.mount')">{{ row.mount }}</span>
+            <span :data-label="t('node.disk.filesystem')"><em>{{ row.fs }}</em></span>
+            <span class="usage-cell" :data-label="t('node.disk.usage')">
               <span class="usage-track">
                 <span :class="row.severity" :style="{ width: `${clampPercent(row.pct)}%` }" />
               </span>
-              {{ Math.round(row.pct) }}%
+              <span class="usage-value">{{ Math.round(row.pct) }}%</span>
             </span>
-            <span class="capacity">{{ row.capacity }}</span>
+            <span class="capacity" :data-label="t('node.disk.capacity')">{{ row.capacity }}</span>
           </div>
         </div>
       </article>
@@ -421,22 +428,25 @@ const healthRows = computed(() => [
   background: var(--bg-card);
 }
 
-.donut strong,
-.donut span {
+.donut__content {
   position: relative;
   z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
 }
 
 .donut strong {
   color: var(--text-primary);
-  font-size: 34px;
+  font-size: 32px;
   line-height: 1;
 }
 
 .donut span {
-  margin-top: 42px;
   color: var(--text-muted);
   font-size: 12px;
+  line-height: 1;
 }
 
 .storage-stats {
@@ -673,13 +683,61 @@ const healthRows = computed(() => [
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .storage-card .card-head {
+    margin-bottom: 10px;
+  }
+
   .donut {
-    width: min(180px, 100%);
+    width: 144px;
     justify-self: center;
   }
 
   .card-head--row {
     flex-direction: column;
+  }
+
+  .disk-table {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: visible;
+    border: 0;
+  }
+
+  .disk-head {
+    display: none;
+  }
+
+  .disk-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    min-width: 0;
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    background: var(--bg-card-soft);
+    padding: 12px;
+  }
+
+  .disk-row > span {
+    display: grid;
+    grid-template-columns: minmax(82px, 0.42fr) minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    overflow-wrap: anywhere;
+  }
+
+  .disk-row > span::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .usage-cell {
+    grid-template-columns: minmax(82px, 0.42fr) minmax(0, 1fr) auto;
+  }
+
+  .usage-value {
+    font-variant-numeric: tabular-nums;
   }
 }
 </style>
