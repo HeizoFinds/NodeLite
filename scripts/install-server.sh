@@ -14,7 +14,7 @@ set -eu
 umask 077
 
 # VERSION 环境变量:默认只安装正式版本。如需 alpha/beta/RC 等预发布版本,
-# 必须显式设置 VERSION=v2.3.0-alpha.1,否则安装脚本会拒绝。
+# 必须显式设置 NODELITE_SERVER_VERSION=v2.3.0-alpha.1,否则安装脚本会拒绝。
 # 留空时自动使用 GitHub 最新正式版。
 VERSION="${NODELITE_SERVER_VERSION:-}"
 if [ -n "$VERSION" ]; then
@@ -38,9 +38,19 @@ GEOIP_UPDATE_INTERVAL_DAYS="${NODELITE_GEOIP_UPDATE_INTERVAL_DAYS:-30}"
 TMP_BIN=""
 TMP_SHA256=""
 
-# 统一的错误输出函数。
+# 检测当前脚本是否跑在交互式终端中。这里不能主动触碰 `/dev/tty`,
+# 否则像网页触发升级这种无控制终端场景会在探测阶段就被 shell 报错打断。
+has_tty() {
+  [ -t 0 ] || [ -t 1 ] || [ -t 2 ]
+}
+
+# 统一的错误输出函数。stderr 被重定向时也尽量写回当前终端,避免用户只看到标题。
 fail() {
-  printf '%s\n' "install-server: $*" >&2
+  message="install-server: $*"
+  printf '%s\n' "$message" >&2
+  if has_tty && [ ! -t 2 ]; then
+    printf '%s\n' "$message" >/dev/tty 2>/dev/null || true
+  fi
   exit 1
 }
 
@@ -56,12 +66,6 @@ cleanup() {
 }
 
 trap cleanup EXIT HUP INT TERM
-
-# 检测当前脚本是否跑在交互式终端中。这里不能主动触碰 `/dev/tty`,
-# 否则像网页触发升级这种无控制终端场景会在探测阶段就被 shell 报错打断。
-has_tty() {
-  [ -t 0 ] || [ -t 1 ] || [ -t 2 ]
-}
 
 # 统一输出一整行文本。
 tty_println() {
@@ -248,10 +252,13 @@ fetch_expected_sha256() {
   printf '%s' "$expected_sha256"
 }
 
-# 检查版本号是否是正式版（不含 alpha/beta/RC 标记）。
+# 检查版本号是否是正式版（不含任何 SemVer prerelease 后缀）。
 is_stable_version() {
-  case "$1" in
-    *-alpha*|*-beta*|*-rc*|*-pre*|*-test*)
+  version_value="$1"
+  version_value="${version_value#v}"
+  version_value="${version_value#V}"
+  case "$version_value" in
+    ""|*-*)
       return 1
       ;;
   esac
@@ -532,6 +539,8 @@ tty_println ""
 
 validate_mode "$MODE"
 
+resolve_release_base_url
+
 existing_install_root="$(detect_existing_install_root)"
 if [ -n "$existing_install_root" ]; then
   INSTALL_ROOT_DEFAULT="$existing_install_root"
@@ -552,10 +561,10 @@ fi
 
 if [ "$MODE" = "upgrade" ] || [ "$MODE" = "migrate" ]; then
   if [ "$existing_install" -ne 1 ]; then
-    fail "$MODE mode requires an existing NodeLite server installation"
+    fail "$MODE mode requires an existing NodeLite server installation; expected $UNIT_PATH or $BIN_PATH. If this is a fresh install, rerun without NODELITE_SERVER_MODE=upgrade."
   fi
   if [ -z "$existing_install_root" ]; then
-    fail "failed to detect the current NodeLite install root from the systemd unit"
+    fail "failed to detect the current NodeLite install root from $UNIT_PATH; expected a WorkingDirectory= entry in the systemd unit."
   fi
 fi
 
@@ -638,7 +647,6 @@ case "$ARCH" in
 esac
 
 ARTIFACT_NAME="nodelite-server-$TARGET"
-resolve_release_base_url
 DOWNLOAD_URL="$BASE_URL/$ARTIFACT_NAME"
 
 mkdir -p "$INSTALL_ROOT" "$CONFIG_DIR" "$DATA_DIR"
