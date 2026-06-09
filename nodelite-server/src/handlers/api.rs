@@ -74,6 +74,7 @@ pub(crate) async fn bootstrap(State(state): State<AppState>) -> impl IntoRespons
         geoip_enabled: config.geoip.enabled,
         geoip_provider: config.geoip.enabled.then_some(match config.geoip.provider {
             GeoIpProvider::Dbip => "dbip",
+            GeoIpProvider::Ipwhois => "ipwhois",
             GeoIpProvider::Custom => "custom",
         }),
     })

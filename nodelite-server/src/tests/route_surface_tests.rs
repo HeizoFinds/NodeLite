@@ -218,6 +218,13 @@ fn bootstrap_reports_geoip_attribution_fields() {
         assert_eq!(dbip["geoip_enabled"], Value::Bool(true));
         assert_eq!(dbip["geoip_provider"], Value::String("dbip".to_string()));
 
+        let ipwhois = bootstrap_payload(&temp_dir, "ipwhois", true, GeoIpProvider::Ipwhois).await;
+        assert_eq!(ipwhois["geoip_enabled"], Value::Bool(true));
+        assert_eq!(
+            ipwhois["geoip_provider"],
+            Value::String("ipwhois".to_string())
+        );
+
         let custom = bootstrap_payload(&temp_dir, "custom", true, GeoIpProvider::Custom).await;
         assert_eq!(custom["geoip_enabled"], Value::Bool(true));
         assert_eq!(

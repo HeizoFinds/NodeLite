@@ -81,13 +81,13 @@ fn parses_server_config_with_defaults() {
     assert!(config.audit.log_token_events);
     assert!(config.audit.log_rate_limit);
     assert!(config.geoip.enabled);
-    assert_eq!(config.geoip.provider, GeoIpProvider::Dbip);
+    assert_eq!(config.geoip.provider, GeoIpProvider::Ipwhois);
     assert_eq!(config.geoip.edition, GeoIpEdition::CountryLite);
     assert_eq!(
         config.geoip.database_path,
         PathBuf::from("./data/geoip/dbip.mmdb")
     );
-    assert!(config.geoip.auto_update);
+    assert!(!config.geoip.auto_update);
     assert_eq!(
         config.geoip.update_interval_days,
         DEFAULT_GEOIP_UPDATE_INTERVAL_DAYS
@@ -147,6 +147,27 @@ fn parses_server_config_with_geoip_overrides() {
     );
     assert!(!config.geoip.auto_update);
     assert_eq!(config.geoip.update_interval_days, 45);
+}
+
+#[test]
+fn parses_server_config_with_ipwhois_geoip_provider() {
+    let config = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+
+        [geoip]
+        enabled = true
+        provider = "ipwhois"
+        auto_update = false
+        "#,
+    )
+    .expect("ipwhois geoip config should parse");
+
+    assert!(config.geoip.enabled);
+    assert_eq!(config.geoip.provider, GeoIpProvider::Ipwhois);
+    assert!(!config.geoip.auto_update);
 }
 
 #[test]

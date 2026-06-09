@@ -437,9 +437,9 @@ impl RawServerConfigFile {
                 "geoip.update_interval_days must be greater than 0",
             ));
         }
-        if self.geoip.provider == GeoIpProvider::Custom && self.geoip.auto_update {
+        if self.geoip.provider != GeoIpProvider::Dbip && self.geoip.auto_update {
             return Err(ConfigError::new(
-                "geoip.auto_update must be false when geoip.provider = \"custom\"",
+                "geoip.auto_update must be false unless geoip.provider = \"dbip\"",
             ));
         }
         Ok(GeoIpConfig {

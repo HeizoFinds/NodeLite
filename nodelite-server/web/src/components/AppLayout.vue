@@ -28,6 +28,12 @@ const geoipAttribution = computed<GeoIpAttribution | null>(() => {
       href: 'https://db-ip.com',
     };
   }
+  if (bootstrap.geoip_provider === 'ipwhois') {
+    return {
+      label: 'IP geolocation by IPWhois',
+      href: 'https://ipwhois.io',
+    };
+  }
   if (bootstrap.geoip_provider === 'custom') {
     return {
       label: 'GeoIP database: custom MMDB',

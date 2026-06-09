@@ -121,6 +121,17 @@ describe('AppLayout', () => {
 
     bootstrapStore.data = {
       ...bootstrapStore.data,
+      geoip_provider: 'ipwhois',
+    };
+    await wrapper.vm.$nextTick();
+
+    footer = wrapper.find('.geoip-attribution');
+    const ipwhoisLink = footer.find('a');
+    expect(ipwhoisLink.text()).toBe('IP geolocation by IPWhois');
+    expect(ipwhoisLink.attributes('href')).toBe('https://ipwhois.io');
+
+    bootstrapStore.data = {
+      ...bootstrapStore.data,
       geoip_enabled: false,
       geoip_provider: null,
     };

@@ -76,15 +76,16 @@ log_rate_limit = true
 [geoip]
 # 自动根据 Agent 连接 IP 推断国家/地区。默认开启;需要完全关闭时改为 false。
 enabled = true
-# provider = "dbip" 会使用 DB-IP Lite; provider = "custom" 时只读取本地 database_path。
-provider = "dbip"
-# country-lite 只提供国家; city-lite 会额外填充 city/latitude/longitude。
+# provider = "ipwhois" 会按 IP 变化在线查询; provider = "dbip" 会使用 DB-IP Lite;
+# provider = "custom" 时只读取本地 database_path。
+provider = "ipwhois"
+# DB-IP/custom 本地 MMDB 粒度:country-lite 只提供国家; city-lite 会额外填充 city/latitude/longitude。
 edition = "country-lite"
-# MaxMind DB 格式的 .mmdb 文件路径。中性文件名可同时用于 country-lite / city-lite。
+# DB-IP/custom 使用的 MaxMind DB 格式 .mmdb 文件路径。
 database_path = "./data/geoip/dbip.mmdb"
-# 启动后后台检查并下载 DB-IP Lite 数据库,失败只记录 warning,不阻塞服务启动。
-auto_update = true
-# 本地数据库超过该天数后才会重新下载。
+# 只有 provider = "dbip" 时才允许启用自动下载 DB-IP Lite 数据库。
+auto_update = false
+# provider = "dbip" 且 auto_update = true 时,本地数据库超过该天数才会重新下载。
 update_interval_days = 30
 
 [install]
