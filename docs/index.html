@@ -1182,7 +1182,7 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
             <div class="guide-body">
             <ol class="step-list">
               <li>从 <a href="https://github.com/XiNian-dada/NodeLite/releases" target="_blank" rel="noreferrer" class="text-link">GitHub Releases</a> 下载对应架构的 <code>nodelite-server</code> 二进制</li>
-              <li>复制 <code>config/server.example.toml</code> 并修改关键配置（监听地址、域名、认证凭据等）</li>
+              <li>复制 <code>config/server.example.toml</code> 并修改关键配置（监听地址、域名、认证凭据、GeoIP 模式等）</li>
               <li>将二进制安装到 <code>/usr/local/bin/nodelite-server</code>，配置文件放到 <code>/opt/nodelite/config/server.toml</code></li>
               <li>创建 systemd unit 并启动</li>
               <li>执行 <code>install-agent</code> 签发节点命令</li>
@@ -1198,6 +1198,49 @@ sudo journalctl -u nodelite-server.service -f</pre>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               如果服务端起不来，第一时间检查 <code>sudo journalctl -u nodelite-server.service -n 100 --no-pager</code>
             </div>
+            </div>
+          </details>
+
+          <!-- 节点定位 / GeoIP -->
+          <details class="guide-detail">
+            <summary class="guide-summary">
+              <div class="guide-summary-icon green">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/></svg>
+              </div>
+              <div class="guide-summary-text">
+                <strong>节点定位 &amp; GeoIP</strong>
+                <span>默认用 ipwhois 在线查询，dbip 只在需要本地数据库时启用</span>
+              </div>
+              <svg class="guide-summary-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </summary>
+            <div class="guide-body">
+              <div class="alert info">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                <div class="alert-body">
+                  <strong>默认行为</strong>
+                  <p>NodeLite 默认使用 <code>provider = "ipwhois"</code> 在线查询 GeoIP，不需要下载 DB-IP Lite 数据库。</p>
+                  <p>如果切到 <code>provider = "dbip"</code>，才会启用数据库下载，右下角的 DB-IP attribution 也只在这个模式下显示。</p>
+                </div>
+              </div>
+
+              <div class="cmd-block">
+                <span class="cmd-label">GeoIP 配置示例</span>
+                <pre>[geoip]
+enabled = true
+provider = "ipwhois"
+edition = "country-lite"
+database_path = "./data/geoip/dbip.mmdb"
+auto_update = false
+update_interval_days = 30</pre>
+              </div>
+
+              <div class="alert warn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <div class="alert-body">
+                  <strong>手动位置优先</strong>
+                  <p>如果你在节点设置页手动指定了位置，手动结果会覆盖自动 GeoIP；需要离线使用本地数据库时再改成 <code>provider = "custom"</code> 并指定自己的 <code>database_path</code>。</p>
+                </div>
+              </div>
             </div>
           </details>
 
@@ -1517,7 +1560,7 @@ auth_block_secs = 900</pre>
                     <li>修改 <code>server.toml</code> 中的 <code>[auth] password</code>，然后重启服务端</li>
                     <li>登录面板，在设置页（<code>/</code> → 右下角齿轮图标 → 设置）中修改密码</li>
                   </ul>
-                  <p>注意：密码至少需要 <strong>8 个字符</strong>；如果不同时包含字母和数字，服务端会给出弱密码警告。</p>
+                  <p>注意：密码必须是 <strong>12 到 128 个字符</strong> 的强密码，并同时包含大写字母、小写字母、数字和特殊字符；常见弱密码会被拒绝，启动期校验不通过时服务端会直接拒绝启动。</p>
                 </div>
               </div>
             </div>
@@ -1532,7 +1575,7 @@ auth_block_secs = 900</pre>
                   <p>在 <code>server.toml</code> 中配置：</p>
                   <pre>[auth]
 username = "viewer"
-password = "a-strong-password-123"
+password = "Str0ng#Passphrase!2026"
 enable_2fa = true
 totp_secret = "JBSWY3DPEHPK3PXP"</pre>
                   <p>生成一个新的 base32 secret：</p>
