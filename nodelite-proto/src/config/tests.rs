@@ -190,6 +190,25 @@ fn rejects_custom_geoip_auto_update() {
 }
 
 #[test]
+fn rejects_ipwhois_geoip_auto_update() {
+    let error = parse_server_config(
+        r#"
+        [server]
+        listen = "127.0.0.1:8080"
+        public_base_url = "https://monitor.example.com"
+
+        [geoip]
+        enabled = true
+        provider = "ipwhois"
+        auto_update = true
+        "#,
+    )
+    .expect_err("ipwhois geoip auto update should fail");
+
+    assert!(error.to_string().contains("geoip.auto_update"));
+}
+
+#[test]
 fn parses_server_config_with_trusted_proxies() {
     let config = parse_server_config(
         r#"
