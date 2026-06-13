@@ -65,14 +65,13 @@ pub async fn ws_browser_handler(
 async fn run_browser_session(shared: SharedState, socket: WebSocket) -> anyhow::Result<()> {
     let (mut sender, mut receiver) = socket.split();
 
-    // 1. 立即发送全量 InitialState(连接建立时机各不同,无法集中)。
-    send_initial_state(&shared, &mut sender).await?;
-
-    // 2. InitialState 发送后再订阅增量流,保证订阅后的所有增量都晚于 InitialState。
-    //    若先订阅再发 InitialState,则 send_initial_state() await 期间集中任务广播的
-    //    增量会进队列,但其 generated_at 可能早于随后的 InitialState.generated_at,
-    //    前端会当 stale 丢掉,导致新打开的 dashboard 停在旧数据。
+    // 1. 先订阅增量流,再 drain 所有排队消息,最后发 InitialState。
+    //    这保证 InitialState 之后收到的增量都严格晚于 InitialState 数据。
     let mut incremental_rx = shared.subscribe_browser_incremental();
+    // Drain: 新订阅者可能已有排队消息(集中任务在我们订阅前就广播了),全部丢弃
+    while incremental_rx.try_recv().is_ok() {}
+
+    send_initial_state(&shared, &mut sender).await?;
 
     loop {
         tokio::select! {
@@ -94,7 +93,8 @@ async fn run_browser_session(shared: SharedState, socket: WebSocket) -> anyhow::
                         send_browser_message(&mut sender, &msg).await?;
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        // 落后丢消息:客户端状态可能不一致 → 重发全量 InitialState 强制重同步
+                        // 落后丢消息:客户端状态可能不一致 → drain + 重发 InitialState 强制重同步
+                        while incremental_rx.try_recv().is_ok() {}
                         send_initial_state(&shared, &mut sender).await?;
                     }
                     Err(broadcast::error::RecvError::Closed) => return Ok(()),

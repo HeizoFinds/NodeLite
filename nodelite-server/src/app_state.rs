@@ -111,8 +111,11 @@ impl AppState {
 
         let shutdown = CancellationToken::new();
         let shared = SharedState::new(config.clone());
-        // 测试环境也启动集中 diff 任务,但 JoinHandle 不纳入管理(测试结束时自然退出)
-        let _ = crate::state::spawn_browser_incremental_task(shared.clone(), shutdown.clone());
+        // 测试环境也启动集中 diff 任务,JoinHandle detach(测试结束时 shutdown token 取消)
+        std::mem::drop(crate::state::spawn_browser_incremental_task(
+            shared.clone(),
+            shutdown.clone(),
+        ));
 
         Ok(Self {
             history,
