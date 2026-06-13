@@ -109,6 +109,9 @@ impl AppState {
         let geoip = GeoIpResolver::new(config.geoip.clone()).await;
         let registry = NodeRegistry::load(config.node_registry_path.as_path()).await?;
 
+        let shared = SharedState::new(config.clone());
+        crate::state::spawn_browser_incremental_task(shared.clone());
+
         Ok(Self {
             history,
             agent_logs: AgentLogStore::new(),
@@ -128,7 +131,7 @@ impl AppState {
             ),
             readiness,
             registry,
-            shared: SharedState::new(config.clone()),
+            shared,
             ws_admission: WsAdmissionController::new(&config.ws),
             browser_ws_admission: WsAdmissionController::new(&config.ws),
             readonly_auth: Arc::new(RwLock::new(ReadonlyRouteAuth::from_config(

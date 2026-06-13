@@ -135,6 +135,7 @@ async fn initialize_server_runtime(
             )
         })?;
     let shared = SharedState::new(Arc::clone(&config));
+    crate::state::spawn_browser_incremental_task(shared.clone());
     let history = HistoryStore::new(
         config.history_db_path.clone(),
         config.sqlite_busy_timeout_secs,
