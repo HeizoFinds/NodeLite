@@ -231,10 +231,13 @@ fetch_expected_sha256() {
   [ -n "$EXPECTED_SHA256" ] || fail "missing checksum entry for $artifact_name"
 }
 
-# 检查版本号是否是正式版（不含 alpha/beta/RC 标记）。
+# 检查版本号是否是正式版（不含任何 SemVer prerelease 后缀）。
 is_stable_version() {
-  case "$1" in
-    *-alpha*|*-beta*|*-rc*|*-pre*|*-test*)
+  version_value="$1"
+  version_value="${version_value#v}"
+  version_value="${version_value#V}"
+  case "$version_value" in
+    ""|*-*)
       return 1
       ;;
   esac

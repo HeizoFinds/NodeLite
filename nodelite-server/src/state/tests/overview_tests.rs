@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn overview_saturates_totals_and_skips_invalid_rates() {
-    let mut registry = Registry::default();
+    let registry = Registry::default();
     let now = Utc
         .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
         .single()
@@ -12,6 +12,7 @@ fn overview_saturates_totals_and_skips_invalid_rates() {
         1,
         sample_identity(),
         Some("198.51.100.10".to_string()),
+        None,
         None,
         now,
     );
@@ -23,6 +24,7 @@ fn overview_saturates_totals_and_skips_invalid_rates() {
             ..sample_identity()
         },
         Some("198.51.100.11".to_string()),
+        None,
         None,
         now,
     );
@@ -50,7 +52,7 @@ fn overview_saturates_totals_and_skips_invalid_rates() {
 
 #[test]
 fn overview_avoids_overflow_when_summing_latency() {
-    let mut registry = Registry::default();
+    let registry = Registry::default();
     let now = Utc
         .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
         .single()
@@ -60,6 +62,7 @@ fn overview_avoids_overflow_when_summing_latency() {
         1,
         sample_identity(),
         Some("198.51.100.10".to_string()),
+        None,
         None,
         now,
     );
@@ -71,6 +74,7 @@ fn overview_avoids_overflow_when_summing_latency() {
             ..sample_identity()
         },
         Some("198.51.100.11".to_string()),
+        None,
         None,
         now,
     );

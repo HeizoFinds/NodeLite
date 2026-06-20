@@ -146,7 +146,7 @@ pub enum BrowserMessage {
     /// 单节点增量:新增或更新一行,客户端按 `node_id` 合并进本地 Map。
     NodeUpsert {
         generated_at: DateTime<Utc>,
-        node: NodeListItem,
+        node: Box<NodeListItem>,
     },
     /// 单节点移除(注销),客户端按 `node_id` 删除。
     NodeRemoved {
@@ -231,6 +231,7 @@ mod tests {
         };
         assert_eq!(legacy.snapshot.cpu_usage_percent, Some(42.5));
         assert_eq!(null.snapshot.cpu_usage_percent, None);
+        assert_eq!(legacy.snapshot.network.packet_loss_percent, None);
     }
 
     /// 验证所有 WireMessage 子类型都能完整序列化和反序列化。
@@ -276,6 +277,7 @@ mod tests {
                     total_tx_bytes: 200,
                     rx_bytes_per_sec: Some(10.0),
                     tx_bytes_per_sec: Some(20.0),
+                    packet_loss_percent: Some(0.5),
                 },
             },
         });
@@ -333,6 +335,10 @@ mod tests {
             geoip_city: None,
             geoip_latitude: None,
             geoip_longitude: None,
+            location_override_country: None,
+            location_override_city: None,
+            location_override_latitude: None,
+            location_override_longitude: None,
             snapshot: Some(NodeListSnapshot {
                 cpu_usage_percent: Some(33.0),
                 load: NodeListLoadAverage { one: 0.5 },
@@ -354,7 +360,10 @@ mod tests {
             generated_at,
             overview,
         };
-        let upsert = BrowserMessage::NodeUpsert { generated_at, node };
+        let upsert = BrowserMessage::NodeUpsert {
+            generated_at,
+            node: Box::new(node),
+        };
         let removed = BrowserMessage::NodeRemoved {
             generated_at,
             node_id: "hk-01".to_string(),

@@ -9,24 +9,36 @@ import NodeHealthMatrix from './NodeHealthMatrix.vue';
 
 const FAKE_DICT = {
   en: {
-    'index.matrix.title': 'Latency Overview (ms)',
-    'index.matrix.subtitle': 'Recent RTT per node',
+    'index.matrix.title': 'Load Overview',
+    'index.matrix.subtitle': 'Current average load per node',
     'index.matrix.more': 'More',
+    'index.matrix.col_node': 'Node',
     'index.matrix.col_current': 'Now',
+    'index.matrix.col_current_load': 'Current Load',
+    'index.matrix.col_status': 'Status',
     'index.matrix.empty': 'No agents reporting yet.',
     'index.node.load': 'Load',
     'index.node.cpu': 'CPU',
     'index.node.memory': 'Memory',
+    'common.online': 'Online',
+    'common.offline': 'Offline',
+    'common.latency_warn': 'High latency',
   },
   'zh-CN': {
-    'index.matrix.title': '延迟概览 (ms)',
-    'index.matrix.subtitle': '节点近期 RTT',
+    'index.matrix.title': '负载概览',
+    'index.matrix.subtitle': '节点近期平均负载',
     'index.matrix.more': '更多',
+    'index.matrix.col_node': '节点',
     'index.matrix.col_current': '当前',
+    'index.matrix.col_current_load': '当前负载',
+    'index.matrix.col_status': '状态',
     'index.matrix.empty': '暂无节点接入。',
     'index.node.load': '负载',
     'index.node.cpu': 'CPU',
     'index.node.memory': '内存',
+    'common.online': '在线',
+    'common.offline': '离线',
+    'common.latency_warn': '高延迟',
   },
 };
 
@@ -67,11 +79,25 @@ describe('NodeHealthMatrix', () => {
 
   it('shows the empty state before agents report', async () => {
     const wrapper = await mountMatrix();
-    expect(wrapper.find('[data-test="health-matrix-empty"]').text()).toBe('No agents reporting yet.');
+    expect(wrapper.find('[data-test="health-matrix-empty"]').text()).toBe(
+      'No agents reporting yet.',
+    );
   });
 
   it('sorts nodes by label and limits the table to ten rows', async () => {
-    const names = ['Zulu', 'Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliet'];
+    const names = [
+      'Zulu',
+      'Alpha',
+      'Bravo',
+      'Charlie',
+      'Delta',
+      'Echo',
+      'Foxtrot',
+      'Golf',
+      'Hotel',
+      'India',
+      'Juliet',
+    ];
     const wrapper = await mountMatrix(
       names.map((name) =>
         makeNode({
@@ -96,7 +122,7 @@ describe('NodeHealthMatrix', () => {
     ]);
   });
 
-  it('renders latency, load, cpu, and memory values with legacy tones', async () => {
+  it('renders load, cpu, memory, and status values with tones', async () => {
     const wrapper = await mountMatrix([
       makeNode({
         identity: { node_id: 'alpha', node_label: 'Alpha', hostname: 'alpha', tags: [] },
@@ -110,19 +136,19 @@ describe('NodeHealthMatrix', () => {
     ]);
 
     const row = wrapper.find('[data-test="health-matrix-row"]');
-    const latency = row.find('[data-test="health-matrix-latency"]');
     const load = row.find('[data-test="health-matrix-load"]');
     const cpu = row.find('[data-test="health-matrix-cpu"]');
     const memory = row.find('[data-test="health-matrix-memory"]');
+    const status = row.find('[data-test="health-matrix-status"]');
 
-    expect(latency.text()).toBe('42');
-    expect(latency.classes()).toContain('green');
     expect(load.text()).toBe('1.24');
     expect(load.classes()).toContain('yellow');
     expect(cpu.text()).toBe('64%');
     expect(cpu.classes()).toContain('yellow');
     expect(memory.text()).toBe('50%');
     expect(memory.classes()).toContain('yellow');
+    expect(status.text()).toBe('Online');
+    expect(status.classes()).toContain('online');
   });
 
   it('uses muted placeholders when live metrics are unavailable', async () => {
@@ -136,7 +162,6 @@ describe('NodeHealthMatrix', () => {
 
     const row = wrapper.find('[data-test="health-matrix-row"]');
     for (const selector of [
-      '[data-test="health-matrix-latency"]',
       '[data-test="health-matrix-load"]',
       '[data-test="health-matrix-cpu"]',
       '[data-test="health-matrix-memory"]',

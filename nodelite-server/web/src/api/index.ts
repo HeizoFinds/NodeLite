@@ -21,8 +21,11 @@ import type {
   RefreshNodeTokenRequest,
   SettingsActionResponse,
   SettingsResponse,
+  ServerUpdateLogResponse,
   TwoFactorSetupResponse,
+  UpdateNodeLocationOverrideRequest,
   UpdateAlertSettingsRequest,
+  UpdateNodeServiceMetadataRequest,
 } from './types';
 
 export type {
@@ -65,6 +68,7 @@ export type {
   SettingsAuth,
   SettingsResponse,
   SettingsUpdates,
+  ServerUpdateLogResponse,
   TriggeredRulePreview,
   TwoFactorSetupResponse,
   UpdateAlertRuleRequest,
@@ -72,6 +76,8 @@ export type {
   UpdateAlertSmtpSettingsRequest,
   UpdateAlertWebhookSettingsRequest,
   UpdateInspectionSettingsRequest,
+  UpdateNodeLocationOverrideRequest,
+  UpdateNodeServiceMetadataRequest,
 } from './types';
 
 function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -115,10 +121,13 @@ export const apiClient = {
   settings: () => api<SettingsResponse>('/api/settings'),
   updateServer: (body: ReauthPayload) =>
     postJson<SettingsActionResponse>('/api/settings/update/server', body),
+  serverUpdateLog: (offset = 0) => {
+    const params = new URLSearchParams({ offset: String(offset) });
+    return api<ServerUpdateLogResponse>(`/api/settings/update/server/log?${params.toString()}`);
+  },
 
   // --- Account / security ---
-  twoFactorStart: () =>
-    postJson<TwoFactorSetupResponse>('/api/settings/2fa/start', {}),
+  twoFactorStart: () => postJson<TwoFactorSetupResponse>('/api/settings/2fa/start', {}),
   twoFactorEnable: (body: EnableTwoFactorRequest) =>
     postJson<SettingsActionResponse>('/api/settings/2fa/enable', body),
   twoFactorDisable: (body: DisableTwoFactorRequest) =>
@@ -134,4 +143,11 @@ export const apiClient = {
   // --- Per-node token refresh ---
   refreshNodeToken: (id: string, body: RefreshNodeTokenRequest) =>
     postJson<NodeTokenRefreshResponse>(`/api/nodes/${encodeURIComponent(id)}/refresh-token`, body),
+  updateNodeServiceMetadata: (id: string, body: UpdateNodeServiceMetadataRequest) =>
+    postJson<SettingsActionResponse>(`/api/nodes/${encodeURIComponent(id)}/service-meta`, body),
+  updateNodeLocationOverride: (id: string, body: UpdateNodeLocationOverrideRequest) =>
+    postJson<SettingsActionResponse>(
+      `/api/nodes/${encodeURIComponent(id)}/location-override`,
+      body,
+    ),
 };

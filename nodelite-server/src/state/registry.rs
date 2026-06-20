@@ -1,36 +1,70 @@
 //! 节点运行态注册表与会话生命周期。
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 #[cfg(test)]
 use nodelite_proto::DiskUsage;
 use nodelite_proto::{
-    GeoIpLocation, MetricsConfig, NodeIdentity, NodeListIdentity, NodeListItem, NodeListSnapshot,
-    NodeSnapshot, NodeStatus, OverviewData,
+    AlertRuleConfig, GeoIpLocation, InspectionConfig, MetricsConfig, NodeIdentity,
+    NodeListIdentity, NodeListItem, NodeListItemView, NodeListSnapshot, NodeSnapshot, NodeStatus,
+    OverviewData,
 };
 
 use super::overview::{OverviewNode, build_overview_from_iter};
 use super::session_control::SessionControlHandle;
 use crate::ServerReadiness;
+use crate::alerts::{
+    AlertStatusView, EvaluatedRule, InspectionReport,
+    build_inspection_report as build_alert_inspection_report, evaluate_rules,
+};
 use crate::handlers::metrics_exporter::{PrometheusNode, render_prometheus_metrics_from_iter};
 
-#[derive(Debug, Default)]
+const REGISTRY_SHARD_COUNT: usize = 32;
+
+#[derive(Debug)]
 pub(super) struct Registry {
+    shards: Vec<RwLock<RegistryShard>>,
+    string_pool: Arc<crate::string_pool::StringPool>,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self {
+            shards: (0..REGISTRY_SHARD_COUNT)
+                .map(|_| RwLock::new(RegistryShard::default()))
+                .collect(),
+            string_pool: Arc::new(crate::string_pool::StringPool::new()),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct RegistryShard {
     nodes: HashMap<String, NodeEntry>,
-    sorted_node_ids: Vec<String>,
 }
 
 /// 单节点的运行态条目。外部响应模型只在 API / snapshot 边界按需组装。
+///
+/// 字符串池优化: `geoip_country`, `geoip_city`, `location_override_country`, `location_override_city`
+/// 使用 Arc<str> 存储,在高重复场景(如 1000 节点同城)大幅降低内存占用。
 #[derive(Debug, Clone)]
 struct NodeEntry {
     identity: NodeIdentity,
     remote_ip: Option<String>,
-    geoip_country: Option<String>,
-    geoip_city: Option<String>,
+    geoip_country: Option<Arc<str>>,
+    geoip_city: Option<Arc<str>>,
     geoip_latitude: Option<f64>,
     geoip_longitude: Option<f64>,
+    location_override_country: Option<Arc<str>>,
+    location_override_city: Option<Arc<str>>,
+    location_override_latitude: Option<f64>,
+    location_override_longitude: Option<f64>,
     snapshot: Option<NodeSnapshot>,
     last_seen: Option<DateTime<Utc>>,
     latency_ms: Option<u64>,
@@ -45,10 +79,18 @@ impl NodeEntry {
         identity: NodeIdentity,
         remote_ip: Option<String>,
         geoip: Option<GeoIpLocation>,
+        location_override: Option<GeoIpLocation>,
         now: DateTime<Utc>,
+        string_pool: &crate::string_pool::StringPool,
     ) -> Self {
         let (geoip_country, geoip_city, geoip_latitude, geoip_longitude) =
-            geoip_fields_from_location(geoip.as_ref());
+            geoip_fields_from_location(geoip.as_ref(), string_pool);
+        let (
+            location_override_country,
+            location_override_city,
+            location_override_latitude,
+            location_override_longitude,
+        ) = geoip_fields_from_location(location_override.as_ref(), string_pool);
         Self {
             identity,
             remote_ip,
@@ -56,6 +98,10 @@ impl NodeEntry {
             geoip_city,
             geoip_latitude,
             geoip_longitude,
+            location_override_country,
+            location_override_city,
+            location_override_latitude,
+            location_override_longitude,
             snapshot: None,
             last_seen: Some(now),
             latency_ms: None,
@@ -65,15 +111,28 @@ impl NodeEntry {
         }
     }
 
-    fn from_restored_status(mut status: NodeStatus) -> Self {
+    fn from_restored_status(
+        mut status: NodeStatus,
+        string_pool: &crate::string_pool::StringPool,
+    ) -> Self {
         status.online = false;
         Self {
             identity: status.identity,
             remote_ip: status.remote_ip,
-            geoip_country: status.geoip_country,
-            geoip_city: status.geoip_city,
+            geoip_country: status.geoip_country.as_ref().map(|s| string_pool.intern(s)),
+            geoip_city: status.geoip_city.as_ref().map(|s| string_pool.intern(s)),
             geoip_latitude: status.geoip_latitude,
             geoip_longitude: status.geoip_longitude,
+            location_override_country: status
+                .location_override_country
+                .as_ref()
+                .map(|s| string_pool.intern(s)),
+            location_override_city: status
+                .location_override_city
+                .as_ref()
+                .map(|s| string_pool.intern(s)),
+            location_override_latitude: status.location_override_latitude,
+            location_override_longitude: status.location_override_longitude,
             snapshot: status.snapshot,
             last_seen: status.last_seen,
             latency_ms: status.latency_ms,
@@ -83,22 +142,35 @@ impl NodeEntry {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn register_session(
         &mut self,
         session_id: u64,
         identity: NodeIdentity,
         remote_ip: Option<String>,
         geoip: Option<GeoIpLocation>,
+        location_override: Option<GeoIpLocation>,
         now: DateTime<Utc>,
+        string_pool: &crate::string_pool::StringPool,
     ) {
         let (geoip_country, geoip_city, geoip_latitude, geoip_longitude) =
-            geoip_fields_from_location(geoip.as_ref());
+            geoip_fields_from_location(geoip.as_ref(), string_pool);
+        let (
+            location_override_country,
+            location_override_city,
+            location_override_latitude,
+            location_override_longitude,
+        ) = geoip_fields_from_location(location_override.as_ref(), string_pool);
         self.identity = identity;
         self.remote_ip = remote_ip;
         self.geoip_country = geoip_country;
         self.geoip_city = geoip_city;
         self.geoip_latitude = geoip_latitude;
         self.geoip_longitude = geoip_longitude;
+        self.location_override_country = location_override_country;
+        self.location_override_city = location_override_city;
+        self.location_override_latitude = location_override_latitude;
+        self.location_override_longitude = location_override_longitude;
         self.online = true;
         self.last_seen = Some(now);
         self.latency_ms = None;
@@ -110,10 +182,17 @@ impl NodeEntry {
         NodeStatus {
             identity: self.identity.clone(),
             remote_ip: self.remote_ip.clone(),
-            geoip_country: self.geoip_country.clone(),
-            geoip_city: self.geoip_city.clone(),
+            geoip_country: self.geoip_country.as_ref().map(|s| s.to_string()),
+            geoip_city: self.geoip_city.as_ref().map(|s| s.to_string()),
             geoip_latitude: self.geoip_latitude,
             geoip_longitude: self.geoip_longitude,
+            location_override_country: self
+                .location_override_country
+                .as_ref()
+                .map(|s| s.to_string()),
+            location_override_city: self.location_override_city.as_ref().map(|s| s.to_string()),
+            location_override_latitude: self.location_override_latitude,
+            location_override_longitude: self.location_override_longitude,
             snapshot: self.snapshot.clone(),
             last_seen: self.last_seen,
             latency_ms: self.latency_ms,
@@ -124,10 +203,40 @@ impl NodeEntry {
     fn to_summary(&self) -> NodeListItem {
         NodeListItem {
             identity: NodeListIdentity::from(&self.identity),
+            geoip_country: self.geoip_country.as_ref().map(|s| s.to_string()),
+            geoip_city: self.geoip_city.as_ref().map(|s| s.to_string()),
+            geoip_latitude: self.geoip_latitude,
+            geoip_longitude: self.geoip_longitude,
+            location_override_country: self
+                .location_override_country
+                .as_ref()
+                .map(|s| s.to_string()),
+            location_override_city: self.location_override_city.as_ref().map(|s| s.to_string()),
+            location_override_latitude: self.location_override_latitude,
+            location_override_longitude: self.location_override_longitude,
+            snapshot: self.snapshot.as_ref().map(NodeListSnapshot::from),
+            latency_ms: self.latency_ms,
+            online: self.online,
+        }
+    }
+
+    /// 零拷贝构建视图 (Phase 3.2 优化)。
+    ///
+    /// 与 `to_summary()` 的区别:
+    /// - 直接克隆 `Arc<str>` (只增加引用计数,不复制字符串)
+    /// - 序列化时 serde 直接访问 Arc 内部的 str
+    /// - 避免 ~80 KB 字符串克隆 (1000 节点 × 4 字段 × 20 bytes)
+    fn to_summary_view(&self) -> NodeListItemView {
+        NodeListItemView {
+            identity: NodeListIdentity::from(&self.identity),
             geoip_country: self.geoip_country.clone(),
             geoip_city: self.geoip_city.clone(),
             geoip_latitude: self.geoip_latitude,
             geoip_longitude: self.geoip_longitude,
+            location_override_country: self.location_override_country.clone(),
+            location_override_city: self.location_override_city.clone(),
+            location_override_latitude: self.location_override_latitude,
+            location_override_longitude: self.location_override_longitude,
             snapshot: self.snapshot.as_ref().map(NodeListSnapshot::from),
             latency_ms: self.latency_ms,
             online: self.online,
@@ -153,47 +262,101 @@ impl NodeEntry {
     }
 }
 
+impl AlertStatusView for NodeEntry {
+    fn node_id(&self) -> &str {
+        &self.identity.node_id
+    }
+
+    fn node_label(&self) -> &str {
+        &self.identity.node_label
+    }
+
+    fn tags(&self) -> &[String] {
+        &self.identity.tags
+    }
+
+    fn snapshot(&self) -> Option<&NodeSnapshot> {
+        self.snapshot.as_ref()
+    }
+
+    fn last_seen(&self) -> Option<DateTime<Utc>> {
+        self.last_seen
+    }
+
+    fn latency_ms(&self) -> Option<u64> {
+        self.latency_ms
+    }
+
+    fn online(&self) -> bool {
+        self.online
+    }
+}
+
+type GeoIpFields = (Option<Arc<str>>, Option<Arc<str>>, Option<f64>, Option<f64>);
+
+#[allow(clippy::type_complexity)]
 fn geoip_fields_from_location(
     geoip: Option<&GeoIpLocation>,
-) -> (Option<String>, Option<String>, Option<f64>, Option<f64>) {
-    (
-        geoip.map(|location| location.country.clone()),
-        geoip.and_then(|location| location.city.clone()),
-        geoip.and_then(|location| location.latitude),
-        geoip.and_then(|location| location.longitude),
-    )
+    string_pool: &crate::string_pool::StringPool,
+) -> GeoIpFields {
+    match geoip {
+        Some(location) => (
+            Some(string_pool.intern(&location.country)),
+            location.city.as_ref().map(|city| string_pool.intern(city)),
+            location.latitude,
+            location.longitude,
+        ),
+        None => (None, None, None, None),
+    }
 }
 
 impl Registry {
     pub(super) fn register_node(
-        &mut self,
+        &self,
         session_id: u64,
         identity: NodeIdentity,
         remote_ip: Option<String>,
         geoip: Option<GeoIpLocation>,
+        location_override: Option<GeoIpLocation>,
         now: DateTime<Utc>,
     ) {
         let node_id = identity.node_id.clone();
-        if let Some(entry) = self.nodes.get_mut(&node_id) {
-            entry.register_session(session_id, identity, remote_ip, geoip, now);
-        } else {
-            self.nodes.insert(
-                node_id.clone(),
-                NodeEntry::new(session_id, identity, remote_ip, geoip, now),
+        let mut shard = write_lock(self.shard_for(&node_id));
+        if let Some(entry) = shard.nodes.get_mut(&node_id) {
+            entry.register_session(
+                session_id,
+                identity,
+                remote_ip,
+                geoip,
+                location_override,
+                now,
+                &self.string_pool,
             );
-            self.sorted_node_ids.push(node_id);
+        } else {
+            shard.nodes.insert(
+                node_id,
+                NodeEntry::new(
+                    session_id,
+                    identity,
+                    remote_ip,
+                    geoip,
+                    location_override,
+                    now,
+                    &self.string_pool,
+                ),
+            );
         }
-        self.resort_node_ids();
     }
 
     pub(super) fn update_snapshot(
-        &mut self,
+        &self,
         node_id: &str,
         session_id: u64,
         snapshot: NodeSnapshot,
         now: DateTime<Utc>,
     ) -> Option<NodeStatus> {
-        let entry = self.nodes.get_mut(node_id)?;
+        let mut shard = write_lock(self.shard_for(node_id));
+        let entry = shard.nodes.get_mut(node_id)?;
         if entry.active_session_id != Some(session_id) {
             return None;
         }
@@ -205,13 +368,14 @@ impl Registry {
     }
 
     pub(super) fn update_latency(
-        &mut self,
+        &self,
         node_id: &str,
         session_id: u64,
         latency_ms: u64,
         now: DateTime<Utc>,
     ) -> bool {
-        let Some(entry) = self.nodes.get_mut(node_id) else {
+        let mut shard = write_lock(self.shard_for(node_id));
+        let Some(entry) = shard.nodes.get_mut(node_id) else {
             return false;
         };
         if entry.active_session_id != Some(session_id) {
@@ -224,8 +388,9 @@ impl Registry {
         true
     }
 
-    pub(super) fn mark_disconnected(&mut self, node_id: &str, session_id: u64) -> bool {
-        let Some(entry) = self.nodes.get_mut(node_id) else {
+    pub(super) fn mark_disconnected(&self, node_id: &str, session_id: u64) -> bool {
+        let mut shard = write_lock(self.shard_for(node_id));
+        let Some(entry) = shard.nodes.get_mut(node_id) else {
             return false;
         };
         if entry.active_session_id == Some(session_id) {
@@ -238,12 +403,13 @@ impl Registry {
     }
 
     pub(super) fn attach_session_control(
-        &mut self,
+        &self,
         node_id: &str,
         session_id: u64,
         control: SessionControlHandle,
     ) -> bool {
-        let Some(entry) = self.nodes.get_mut(node_id) else {
+        let mut shard = write_lock(self.shard_for(node_id));
+        let Some(entry) = shard.nodes.get_mut(node_id) else {
             return false;
         };
         if entry.active_session_id != Some(session_id) {
@@ -254,21 +420,24 @@ impl Registry {
         true
     }
 
-    pub(super) fn mark_stale(&mut self, threshold: Duration, now: DateTime<Utc>) -> usize {
+    pub(super) fn mark_stale(&self, threshold: Duration, now: DateTime<Utc>) -> usize {
         let mut marked = 0;
 
-        for entry in self.nodes.values_mut() {
-            let Some(last_seen) = entry.last_seen else {
-                continue;
-            };
-            let Ok(elapsed) = (now - last_seen).to_std() else {
-                continue;
-            };
-            if elapsed >= threshold && entry.online {
-                entry.online = false;
-                entry.active_session_id = None;
-                entry.control = None;
-                marked += 1;
+        for shard in &self.shards {
+            let mut shard = write_lock(shard);
+            for entry in shard.nodes.values_mut() {
+                let Some(last_seen) = entry.last_seen else {
+                    continue;
+                };
+                let Ok(elapsed) = (now - last_seen).to_std() else {
+                    continue;
+                };
+                if elapsed >= threshold && entry.online {
+                    entry.online = false;
+                    entry.active_session_id = None;
+                    entry.control = None;
+                    marked += 1;
+                }
             }
         }
 
@@ -276,67 +445,121 @@ impl Registry {
     }
 
     pub(super) fn is_current_session(&self, node_id: &str, session_id: u64) -> bool {
-        self.nodes
+        read_lock(self.shard_for(node_id))
+            .nodes
             .get(node_id)
             .and_then(|entry| entry.active_session_id)
             == Some(session_id)
     }
 
     pub(super) fn list_statuses(&self) -> Vec<NodeStatus> {
-        self.sorted_node_ids
-            .iter()
-            .filter_map(|node_id| self.nodes.get(node_id))
+        let shards = self.read_all_shards();
+        sorted_entries(&shards)
+            .into_iter()
             .map(NodeEntry::to_status)
             .collect()
     }
 
+    #[cfg(test)]
     pub(super) fn list_node_summaries(&self) -> Vec<NodeListItem> {
-        self.sorted_node_ids
-            .iter()
-            .filter_map(|node_id| self.nodes.get(node_id))
+        let shards = self.read_all_shards();
+        sorted_entries(&shards)
+            .into_iter()
             .map(NodeEntry::to_summary)
             .collect()
     }
 
+    /// 零拷贝版本的 `list_node_summaries` (Phase 3.2 优化)。
+    ///
+    /// 返回 `NodeListItemView` 避免从 `Arc<str>` 克隆字符串,减少 API 响应延迟。
+    pub(super) fn list_node_summaries_view(&self) -> Vec<NodeListItemView> {
+        let shards = self.read_all_shards();
+        sorted_entries(&shards)
+            .into_iter()
+            .map(NodeEntry::to_summary_view)
+            .collect()
+    }
+
+    pub(super) fn browser_view_with_revision<R>(
+        &self,
+        load_revision: impl FnOnce() -> R,
+    ) -> (Vec<NodeListItem>, OverviewData, R) {
+        let shards = self.read_all_shards();
+        let nodes = sorted_entries(&shards)
+            .into_iter()
+            .map(NodeEntry::to_summary)
+            .collect();
+        let overview = overview_from_shards(&shards);
+        let revision = load_revision();
+        (nodes, overview, revision)
+    }
+
+    pub(super) fn evaluate_alert_rules(
+        &self,
+        rules: &[AlertRuleConfig],
+        now: DateTime<Utc>,
+    ) -> Vec<EvaluatedRule> {
+        let shards = self.read_all_shards();
+        evaluate_rules(rules, sorted_entries(&shards), now)
+    }
+
+    pub(super) fn build_alert_inspection_report(
+        &self,
+        inspection: &InspectionConfig,
+        now: DateTime<Utc>,
+    ) -> InspectionReport {
+        let shards = self.read_all_shards();
+        build_alert_inspection_report(inspection, sorted_entries(&shards), now)
+    }
+
     pub(super) fn get_status(&self, node_id: &str) -> Option<NodeStatus> {
-        self.nodes.get(node_id).map(NodeEntry::to_status)
+        read_lock(self.shard_for(node_id))
+            .nodes
+            .get(node_id)
+            .map(NodeEntry::to_status)
     }
 
     pub(super) fn geoip_refresh_candidates(&self) -> Vec<(String, String)> {
-        self.sorted_node_ids
-            .iter()
-            .filter_map(|node_id| {
-                let entry = self.nodes.get(node_id)?;
+        let shards = self.read_all_shards();
+        sorted_entries(&shards)
+            .into_iter()
+            .filter_map(|entry| {
                 if !entry.online || entry.active_session_id.is_none() {
                     return None;
                 }
                 entry
                     .remote_ip
                     .as_ref()
-                    .map(|remote_ip| (node_id.clone(), remote_ip.clone()))
+                    .map(|remote_ip| (entry.identity.node_id.clone(), remote_ip.clone()))
             })
             .collect()
     }
 
     pub(super) fn update_geoip(
-        &mut self,
+        &self,
         node_id: &str,
         expected_remote_ip: &str,
         geoip: GeoIpLocation,
     ) -> bool {
-        let Some(entry) = self.nodes.get_mut(node_id) else {
+        let mut shard = write_lock(self.shard_for(node_id));
+        let Some(entry) = shard.nodes.get_mut(node_id) else {
             return false;
         };
         if entry.remote_ip.as_deref() != Some(expected_remote_ip) {
             return false;
         }
 
-        let geoip_country = Some(geoip.country);
-        let geoip_city = geoip.city;
+        let geoip_country = Some(self.string_pool.intern(&geoip.country));
+        let geoip_city = geoip
+            .city
+            .as_ref()
+            .map(|city| self.string_pool.intern(city));
         let geoip_latitude = geoip.latitude;
         let geoip_longitude = geoip.longitude;
-        if entry.geoip_country == geoip_country
-            && entry.geoip_city == geoip_city
+        if entry.geoip_country.as_ref().map(|s| s.as_ref())
+            == geoip_country.as_ref().map(|s| s.as_ref())
+            && entry.geoip_city.as_ref().map(|s| s.as_ref())
+                == geoip_city.as_ref().map(|s| s.as_ref())
             && entry.geoip_latitude == geoip_latitude
             && entry.geoip_longitude == geoip_longitude
         {
@@ -350,8 +573,41 @@ impl Registry {
         true
     }
 
+    pub(super) fn update_location_override(
+        &self,
+        node_id: &str,
+        location_override: Option<GeoIpLocation>,
+    ) -> bool {
+        let mut shard = write_lock(self.shard_for(node_id));
+        let Some(entry) = shard.nodes.get_mut(node_id) else {
+            return false;
+        };
+        let (
+            location_override_country,
+            location_override_city,
+            location_override_latitude,
+            location_override_longitude,
+        ) = geoip_fields_from_location(location_override.as_ref(), &self.string_pool);
+        if entry.location_override_country.as_ref().map(|s| s.as_ref())
+            == location_override_country.as_ref().map(|s| s.as_ref())
+            && entry.location_override_city.as_ref().map(|s| s.as_ref())
+                == location_override_city.as_ref().map(|s| s.as_ref())
+            && entry.location_override_latitude == location_override_latitude
+            && entry.location_override_longitude == location_override_longitude
+        {
+            return false;
+        }
+
+        entry.location_override_country = location_override_country;
+        entry.location_override_city = location_override_city;
+        entry.location_override_latitude = location_override_latitude;
+        entry.location_override_longitude = location_override_longitude;
+        true
+    }
+
     pub(super) fn session_control(&self, node_id: &str) -> Option<SessionControlHandle> {
-        let entry = self.nodes.get(node_id)?;
+        let shard = read_lock(self.shard_for(node_id));
+        let entry = shard.nodes.get(node_id)?;
         if entry.active_session_id.is_none() || !entry.online {
             return None;
         }
@@ -359,7 +615,8 @@ impl Registry {
     }
 
     pub(super) fn overview(&self) -> OverviewData {
-        build_overview_from_iter(self.nodes.values().map(NodeEntry::overview_node))
+        let shards = self.read_all_shards();
+        overview_from_shards(&shards)
     }
 
     pub(super) fn render_metrics_body(
@@ -367,36 +624,74 @@ impl Registry {
         readiness: &ServerReadiness,
         metrics_config: MetricsConfig,
     ) -> String {
-        let overview = self.overview();
+        let shards = self.read_all_shards();
+        let overview = overview_from_shards(&shards);
+        let entries = sorted_entries(&shards);
         render_prometheus_metrics_from_iter(
             readiness,
-            self.sorted_node_ids
-                .iter()
-                .filter_map(|node_id| self.nodes.get(node_id))
-                .map(NodeEntry::prometheus_node),
+            entries.into_iter().map(NodeEntry::prometheus_node),
             &overview,
             metrics_config,
+            Some(self.string_pool.len()),
         )
     }
 
     pub(super) fn disk_entries_total(&self) -> u64 {
-        self.nodes
-            .values()
-            .filter_map(|entry| entry.snapshot.as_ref())
-            .map(|snapshot| snapshot.disks.len() as u64)
+        self.shards
+            .iter()
+            .map(|shard| {
+                read_lock(shard)
+                    .nodes
+                    .values()
+                    .filter_map(|entry| entry.snapshot.as_ref())
+                    .map(|snapshot| snapshot.disks.len() as u64)
+                    .sum::<u64>()
+            })
             .sum()
     }
 
-    pub(super) fn restore_statuses(&mut self, statuses: Vec<NodeStatus>) {
-        self.nodes.clear();
-        self.sorted_node_ids.clear();
+    pub(super) fn restore_statuses(&self, statuses: Vec<NodeStatus>) {
+        for shard in &self.shards {
+            write_lock(shard).nodes.clear();
+        }
         for status in statuses {
             let node_id = status.identity.node_id.clone();
-            self.nodes
-                .insert(node_id.clone(), NodeEntry::from_restored_status(status));
-            self.sorted_node_ids.push(node_id);
+            write_lock(self.shard_for(&node_id)).nodes.insert(
+                node_id,
+                NodeEntry::from_restored_status(status, &self.string_pool),
+            );
         }
-        self.resort_node_ids();
+    }
+
+    fn read_all_shards(&self) -> Vec<RwLockReadGuard<'_, RegistryShard>> {
+        self.shards.iter().map(read_lock).collect()
+    }
+
+    fn shard_for(&self, node_id: &str) -> &RwLock<RegistryShard> {
+        &self.shards[shard_index(node_id)]
+    }
+
+    #[cfg(test)]
+    pub(super) fn shard_index_for_test(node_id: &str) -> usize {
+        shard_index(node_id)
+    }
+
+    #[cfg(test)]
+    pub(super) fn shard_count_for_test() -> usize {
+        REGISTRY_SHARD_COUNT
+    }
+
+    #[cfg(test)]
+    pub(super) fn nodes_per_shard_for_test(&self) -> Vec<usize> {
+        self.shards
+            .iter()
+            .map(|shard| read_lock(shard).nodes.len())
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn shard_is_read_locked_for_test(&self, node_id: &str) -> bool {
+        self.shard_for(node_id).try_write().is_err()
     }
 
     #[cfg(test)]
@@ -416,25 +711,53 @@ impl Registry {
     pub(super) fn retained_heap_estimates_for_test(
         status: NodeStatus,
     ) -> (RetainedHeapEstimate, RetainedHeapEstimate) {
+        let string_pool = crate::string_pool::StringPool::new();
         let previous_summary = NodeListItem::from(&status);
         let previous =
             node_status_heap_estimate(&status) + node_list_item_heap_estimate(&previous_summary);
-        let runtime = node_entry_heap_estimate(&NodeEntry::from_restored_status(status));
+        let runtime =
+            node_entry_heap_estimate(&NodeEntry::from_restored_status(status, &string_pool));
         (runtime, previous)
     }
+}
 
-    fn resort_node_ids(&mut self) {
-        self.sorted_node_ids.sort_by(|left_id, right_id| {
-            let (Some(left), Some(right)) = (self.nodes.get(left_id), self.nodes.get(right_id))
-            else {
-                return left_id.cmp(right_id);
-            };
-            left.identity
-                .node_label
-                .cmp(&right.identity.node_label)
-                .then_with(|| left.identity.node_id.cmp(&right.identity.node_id))
-        });
-    }
+fn sorted_entries<'a>(shards: &'a [RwLockReadGuard<'_, RegistryShard>]) -> Vec<&'a NodeEntry> {
+    let mut entries = shards
+        .iter()
+        .flat_map(|shard| shard.nodes.values())
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| compare_node_entries(left, right));
+    entries
+}
+
+fn compare_node_entries(left: &NodeEntry, right: &NodeEntry) -> Ordering {
+    left.identity
+        .node_label
+        .cmp(&right.identity.node_label)
+        .then_with(|| left.identity.node_id.cmp(&right.identity.node_id))
+}
+
+fn overview_from_shards(shards: &[RwLockReadGuard<'_, RegistryShard>]) -> OverviewData {
+    build_overview_from_iter(
+        shards
+            .iter()
+            .flat_map(|shard| shard.nodes.values().map(NodeEntry::overview_node)),
+    )
+}
+
+fn shard_index(node_id: &str) -> usize {
+    let mut hasher = DefaultHasher::new();
+    node_id.hash(&mut hasher);
+    (hasher.finish() as usize) % REGISTRY_SHARD_COUNT
+}
+
+fn read_lock<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn write_lock<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]
@@ -460,8 +783,8 @@ impl std::ops::Add for RetainedHeapEstimate {
 fn node_entry_heap_estimate(entry: &NodeEntry) -> RetainedHeapEstimate {
     node_identity_heap_estimate(&entry.identity)
         + option_string_heap_estimate(&entry.remote_ip)
-        + option_string_heap_estimate(&entry.geoip_country)
-        + option_string_heap_estimate(&entry.geoip_city)
+        + option_arc_str_heap_estimate(&entry.geoip_country)
+        + option_arc_str_heap_estimate(&entry.geoip_city)
         + entry
             .snapshot
             .as_ref()
@@ -541,10 +864,28 @@ fn option_string_heap_estimate(value: &Option<String>) -> RetainedHeapEstimate {
 }
 
 #[cfg(test)]
+fn option_arc_str_heap_estimate(value: &Option<Arc<str>>) -> RetainedHeapEstimate {
+    value
+        .as_ref()
+        .map(arc_str_heap_estimate)
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
 fn string_heap_estimate(value: &String) -> RetainedHeapEstimate {
     RetainedHeapEstimate {
         bytes: value.capacity(),
         allocations: usize::from(value.capacity() > 0),
+    }
+}
+
+#[cfg(test)]
+fn arc_str_heap_estimate(value: &Arc<str>) -> RetainedHeapEstimate {
+    // Arc<str> 内存占用 = Arc 控制块 (引用计数等) + 字符串内容
+    // Arc 控制块大约 16-24 字节(取决于平台),字符串内容按实际长度计算
+    RetainedHeapEstimate {
+        bytes: std::mem::size_of::<usize>() * 2 + value.len(),
+        allocations: 1,
     }
 }
 

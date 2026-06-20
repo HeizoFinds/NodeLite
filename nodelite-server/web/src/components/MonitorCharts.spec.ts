@@ -36,10 +36,14 @@ function hp(recorded_at: string): HistoryPoint {
     node_id: 'n',
     recorded_at,
     cpu_usage_percent: 10,
+    load_one: 0.1,
+    load_five: 0.2,
+    load_fifteen: 0.3,
     memory_used_percent: 20,
     rx_bytes_per_sec: 100,
     tx_bytes_per_sec: 50,
     latency_ms: 5,
+    packet_loss_percent: 0.2,
     disk_used_percent: null,
   };
 }

@@ -21,11 +21,25 @@ const FAKE_DICT = {
     'index.node.latency': 'Latency',
     'index.node.load': 'Load',
     'index.node.cpu': 'CPU',
+    'index.node.memory': 'Memory',
+    'index.node.memory_used': 'Memory',
+    'index.node.service_expiry': 'Service expiry',
+    'index.node.renewal_price': 'Renewal price',
+    'index.node.service_unlimited': 'Unlimited',
+    'index.node.self_owned': 'Self-owned',
     'common.online': 'Online',
     'common.offline': 'Offline',
     'common.latency_warn': 'High latency',
   },
-  'zh-CN': { 'common.waiting_for_data': '等待数据…' },
+  'zh-CN': {
+    'common.waiting_for_data': '等待数据…',
+    'index.node.memory': '内存',
+    'index.node.memory_used': '内存',
+    'index.node.service_expiry': '服务到期',
+    'index.node.renewal_price': '续费价格',
+    'index.node.service_unlimited': '无限制',
+    'index.node.self_owned': '自持有',
+  },
 };
 
 const Stub = defineComponent({ render: () => h('div') });

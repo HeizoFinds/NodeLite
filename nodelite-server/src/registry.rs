@@ -23,10 +23,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use nodelite_proto::NodeIdentity;
+use lru::LruCache;
+use nodelite_proto::{GeoIpLocation, NodeIdentity};
+use parking_lot::Mutex as ParkingLotMutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, Semaphore};
 
@@ -69,6 +71,12 @@ const INSTALL_TOKEN_TTL_MINUTES: i64 = 15;
 /// CPU/内存峰值钉住,同时让正常重连只承担队列等待。
 const TOKEN_VERIFY_MAX_PARALLELISM: usize = 2;
 const TOKEN_VERIFY_WAIT_WARN_AFTER: Duration = Duration::from_millis(100);
+const LOCATION_COORDINATE_SCALE: f64 = 1_000_000.0;
+
+/// Token 验证结果缓存容量:假设 100 个节点频繁重连。
+const TOKEN_CACHE_CAPACITY: usize = 128;
+/// Token 验证结果缓存 TTL:5 分钟。重连场景下可直接命中缓存,避免 Argon2id 开销。
+const TOKEN_CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// 已登记节点的持久化条目。
 ///
@@ -103,6 +111,28 @@ pub struct RegisteredNode {
     /// Token 过期时间。None 表示永不过期(向后兼容旧版本注册表)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_expires_at: Option<DateTime<Utc>>,
+    /// 运营侧记录的服务器/套餐到期时间,仅用于设置页展示与提醒。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_expires_at: Option<DateTime<Utc>>,
+    /// 运营侧标记的自持有/无限期服务器,为 true 时不展示到期倒计时。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub service_unlimited: bool,
+    /// 运营侧记录的续费价格,例如 "¥30/月" 或 "$5/mo"。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renewal_price: Option<String>,
+    /// 手动位置覆盖。设置后 UI 地图与位置文本优先使用这里的值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_override_country: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_override_city: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_override_latitude_microdegrees: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_override_longitude_microdegrees: Option<i32>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// 一次成功的 token 验证 / 颁发结果:返回身份与 token 状态快照,
@@ -113,6 +143,7 @@ pub struct AuthorizedNode {
     pub generation: u64,
     pub token_expires_at: Option<DateTime<Utc>>,
     pub registry_revision: u64,
+    pub location_override: Option<GeoIpLocation>,
 }
 
 /// 轻量 token 状态快照,供 WebSocket 会话在 registry revision 变化时刷新本地缓存。
@@ -154,6 +185,16 @@ pub struct InstallSession {
     pub node_session_token: String,
 }
 
+/// Token 验证缓存键:(token_hash_hex, registry_revision)。
+/// 使用 token 的 SHA256 哈希作为缓存键,避免存储明文。
+type TokenCacheKey = (String, u64);
+
+/// Token 验证缓存值:(验证结果, 缓存时间戳)。
+struct TokenCacheEntry {
+    verified: bool,
+    cached_at: Instant,
+}
+
 /// 注册表的运行期视图:进程内部以 HashMap 形式持有,便于鉴权 / 查询。
 #[derive(Debug, Clone)]
 pub struct NodeRegistry {
@@ -163,6 +204,8 @@ pub struct NodeRegistry {
     registry_revision: Arc<AtomicU64>,
     token_verify_limit: usize,
     token_verify_limiter: Arc<Semaphore>,
+    /// Token 验证结果缓存:减少重连场景的 Argon2id 开销。
+    token_cache: Arc<ParkingLotMutex<LruCache<TokenCacheKey, TokenCacheEntry>>>,
     #[cfg(test)]
     token_verify_probe: Option<Arc<TokenVerifyProbe>>,
 }
@@ -206,4 +249,28 @@ struct RegistryFile {
     nodes: Vec<RegisteredNode>,
     #[serde(default)]
     install_sessions: Vec<InstallSession>,
+}
+
+impl RegisteredNode {
+    pub fn location_override(&self) -> Option<GeoIpLocation> {
+        let country = self.location_override_country.clone()?;
+        Some(GeoIpLocation {
+            country,
+            city: self.location_override_city.clone(),
+            latitude: self
+                .location_override_latitude_microdegrees
+                .map(microdegrees_to_coordinate),
+            longitude: self
+                .location_override_longitude_microdegrees
+                .map(microdegrees_to_coordinate),
+        })
+    }
+}
+
+pub(super) fn coordinate_to_microdegrees(value: f64) -> i32 {
+    (value * LOCATION_COORDINATE_SCALE).round() as i32
+}
+
+fn microdegrees_to_coordinate(value: i32) -> f64 {
+    f64::from(value) / LOCATION_COORDINATE_SCALE
 }

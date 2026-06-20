@@ -50,35 +50,39 @@ function logout(): void {
 
     <section class="account" data-test="account-view">
       <template v-if="auth">
-        <article class="panel" data-test="security-card">
-          <h2 class="card-title">{{ t('settings.security.title') }}</h2>
-          <dl class="kv">
-            <div class="kv__row">
-              <dt>{{ t('settings.security.auth') }}</dt>
-              <dd>{{ auth.enabled ? t('common.online') : t('common.offline') }}</dd>
+        <div class="account__grid">
+          <article class="panel security-card" data-test="security-card">
+            <h2 class="card-title">{{ t('settings.security.title') }}</h2>
+            <dl class="kv">
+              <div class="kv__row">
+                <dt>{{ t('settings.security.auth') }}</dt>
+                <dd>{{ auth.enabled ? t('common.online') : t('common.offline') }}</dd>
+              </div>
+              <div class="kv__row">
+                <dt>{{ t('settings.security.username') }}</dt>
+                <dd>{{ auth.username || t('common.not_available') }}</dd>
+              </div>
+              <div class="kv__row">
+                <dt>{{ t('settings.security.2fa') }}</dt>
+                <dd>{{ auth.two_factor_enabled ? t('settings.enabled') : t('settings.disabled') }}</dd>
+              </div>
+              <div class="kv__row">
+                <dt>{{ t('settings.security.session_ttl') }}</dt>
+                <dd>{{ sessionTtlText(auth.session_ttl_secs) }}</dd>
+              </div>
+            </dl>
+            <div class="actions">
+              <button type="button" class="btn btn--danger" data-test="account-logout" @click="logout">
+                {{ t('settings.security.logout') }}
+              </button>
             </div>
-            <div class="kv__row">
-              <dt>{{ t('settings.security.username') }}</dt>
-              <dd>{{ auth.username || t('common.not_available') }}</dd>
-            </div>
-            <div class="kv__row">
-              <dt>{{ t('settings.security.2fa') }}</dt>
-              <dd>{{ auth.two_factor_enabled ? t('settings.enabled') : t('settings.disabled') }}</dd>
-            </div>
-            <div class="kv__row">
-              <dt>{{ t('settings.security.session_ttl') }}</dt>
-              <dd>{{ sessionTtlText(auth.session_ttl_secs) }}</dd>
-            </div>
-          </dl>
-          <div class="actions">
-            <button type="button" class="btn btn--danger" data-test="account-logout" @click="logout">
-              {{ t('settings.security.logout') }}
-            </button>
-          </div>
-        </article>
+          </article>
 
-        <TwoFactorPanel :auth="auth" @changed="store.load()" />
-        <ChangePasswordCard />
+          <div class="account__stack">
+            <TwoFactorPanel :auth="auth" @changed="store.load()" />
+            <ChangePasswordCard />
+          </div>
+        </div>
       </template>
 
       <SettingsMessage
@@ -96,16 +100,29 @@ function logout(): void {
 
 <style scoped>
 .account {
+  width: 100%;
+  max-width: 1180px;
+}
+.account__grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(420px, 1.35fr);
+  gap: 16px;
+  align-items: start;
+}
+.account__stack {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 16px;
-  max-width: 560px;
 }
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
   border-radius: 16px;
   padding: 18px 20px;
+}
+.security-card {
+  min-width: 0;
 }
 .card-title {
   margin: 0 0 12px;
@@ -133,6 +150,8 @@ function logout(): void {
 }
 .actions {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .btn {
   background: var(--bg-card-soft);
@@ -161,5 +180,13 @@ function logout(): void {
 .placeholder {
   color: var(--text-muted);
   font-size: 13px;
+}
+@media (max-width: 880px) {
+  .account {
+    max-width: none;
+  }
+  .account__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

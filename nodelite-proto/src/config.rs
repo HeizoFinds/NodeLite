@@ -228,6 +228,7 @@ pub struct GeoIpConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum GeoIpProvider {
     Dbip,
+    Ipwhois,
     Custom,
 }
 

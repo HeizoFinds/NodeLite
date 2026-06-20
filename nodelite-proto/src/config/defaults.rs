@@ -141,11 +141,11 @@ pub(super) fn default_audit_log_rate_limit() -> bool {
 }
 
 pub(super) fn default_geoip_enabled() -> bool {
-    false
+    true
 }
 
 pub(super) fn default_geoip_provider() -> super::GeoIpProvider {
-    super::GeoIpProvider::Dbip
+    super::GeoIpProvider::Ipwhois
 }
 
 pub(super) fn default_geoip_edition() -> super::GeoIpEdition {
@@ -153,7 +153,7 @@ pub(super) fn default_geoip_edition() -> super::GeoIpEdition {
 }
 
 pub(super) fn default_geoip_auto_update() -> bool {
-    true
+    false
 }
 
 pub(super) fn default_geoip_update_interval_days() -> u64 {

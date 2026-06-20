@@ -1,21 +1,32 @@
-//! GeoIP lookup and DB-IP Lite database preparation.
+//! GeoIP lookup, ipwhois online resolution, and DB-IP Lite database preparation.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::Datelike;
 use flate2::read::GzDecoder;
 use maxminddb::geoip2;
 use nodelite_proto::{GeoIpConfig, GeoIpEdition, GeoIpLocation, GeoIpProvider};
+use reqwest::StatusCode;
+use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+
+use crate::sanitize::sanitize_location_override;
 
 const LAN_COUNTRY_CODE: &str = "LAN";
 const DOWNLOAD_TIMEOUT_SECS: u64 = 30;
 const DBIP_DOWNLOAD_ATTEMPTS: usize = 12;
+const IPWHOIS_ENDPOINT: &str = "https://ipwho.is";
+const IPWHOIS_TIMEOUT_SECS: u64 = 3;
+const IPWHOIS_CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
+const IPWHOIS_RETRY_AFTER_FALLBACK_SECS: u64 = 5 * 60;
+const IPWHOIS_FIELDS: &str = "success,message,country,country_code,region,city,latitude,longitude";
 
 type GeoIpReader = Arc<maxminddb::Reader<Vec<u8>>>;
 
@@ -23,21 +34,67 @@ type GeoIpReader = Arc<maxminddb::Reader<Vec<u8>>>;
 pub(crate) struct GeoIpResolver {
     config: GeoIpConfig,
     reader: Arc<RwLock<Option<GeoIpReader>>>,
+    ipwhois: IpwhoisClient,
+}
+
+#[derive(Clone)]
+struct IpwhoisClient {
+    client: Option<reqwest::Client>,
+    endpoint: Arc<str>,
+    cache: Arc<RwLock<HashMap<IpAddr, CachedIpwhoisLocation>>>,
+    retry_after: Arc<RwLock<Option<Instant>>>,
+}
+
+#[derive(Clone)]
+struct CachedIpwhoisLocation {
+    location: GeoIpLocation,
+    expires_at: Instant,
+}
+
+#[derive(Debug, Deserialize)]
+struct IpwhoisResponse {
+    #[serde(default)]
+    success: bool,
+    #[serde(default)]
+    country: Option<String>,
+    #[serde(default)]
+    country_code: Option<String>,
+    #[serde(default)]
+    region: Option<String>,
+    #[serde(default)]
+    city: Option<String>,
+    #[serde(default)]
+    latitude: Option<f64>,
+    #[serde(default)]
+    longitude: Option<f64>,
 }
 
 impl GeoIpResolver {
     pub(crate) async fn new(config: GeoIpConfig) -> Self {
+        Self::new_with_ipwhois_endpoint(config, IPWHOIS_ENDPOINT).await
+    }
+
+    async fn new_with_ipwhois_endpoint(
+        config: GeoIpConfig,
+        ipwhois_endpoint: impl Into<Arc<str>>,
+    ) -> Self {
         let resolver = Self {
             config,
             reader: Arc::new(RwLock::new(None)),
+            ipwhois: IpwhoisClient::new(ipwhois_endpoint),
         };
-        resolver.reload_from_disk().await;
+        if resolver.uses_local_database() {
+            resolver.reload_from_disk().await;
+        }
         resolver
     }
 
     pub(crate) async fn prepare_database(&self) -> bool {
         if !self.config.enabled {
             return false;
+        }
+        if self.config.provider == GeoIpProvider::Ipwhois {
+            return true;
         }
         if should_skip_download(&self.config) {
             return self.reload_from_disk().await;
@@ -70,11 +127,22 @@ impl GeoIpResolver {
             });
         }
 
+        if self.config.provider == GeoIpProvider::Ipwhois {
+            return self.ipwhois.lookup(ip).await;
+        }
+
         let reader = {
             let guard = self.reader.read().await;
             guard.clone()
         }?;
         lookup_location(&reader, ip, self.config.edition)
+    }
+
+    fn uses_local_database(&self) -> bool {
+        matches!(
+            self.config.provider,
+            GeoIpProvider::Dbip | GeoIpProvider::Custom
+        )
     }
 
     async fn reload_from_disk(&self) -> bool {
@@ -103,10 +171,179 @@ impl GeoIpResolver {
     }
 }
 
+impl IpwhoisClient {
+    fn new(endpoint: impl Into<Arc<str>>) -> Self {
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(IPWHOIS_TIMEOUT_SECS))
+            .build()
+        {
+            Ok(client) => Some(client),
+            Err(error) => {
+                warn!(error = ?error, "failed to build ipwhois client");
+                None
+            }
+        };
+
+        Self {
+            client,
+            endpoint: endpoint.into(),
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            retry_after: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    async fn lookup(&self, ip: IpAddr) -> Option<GeoIpLocation> {
+        if let Some(location) = self.cached_location(ip).await {
+            return Some(location);
+        }
+        if self.is_rate_limited().await {
+            return None;
+        }
+
+        let client = self.client.as_ref()?;
+        let url = match ipwhois_lookup_url(self.endpoint.as_ref(), ip) {
+            Ok(url) => url,
+            Err(error) => {
+                warn!(error = ?error, "failed to build ipwhois lookup url");
+                return None;
+            }
+        };
+        let response = match client.get(url).send().await {
+            Ok(response) => response,
+            Err(_) => {
+                warn!("ipwhois lookup request failed");
+                return None;
+            }
+        };
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            self.set_retry_after(response.headers()).await;
+            warn!("ipwhois rate limit reached; geoip lookup will retry later");
+            return None;
+        }
+        let response = match response.error_for_status() {
+            Ok(response) => response,
+            Err(error) => {
+                warn!(
+                    status = error.status().map(|status| status.as_u16()),
+                    "ipwhois lookup returned an error status"
+                );
+                return None;
+            }
+        };
+        let body = match response.bytes().await {
+            Ok(body) => body,
+            Err(error) => {
+                warn!(error = ?error, "failed to read ipwhois lookup response");
+                return None;
+            }
+        };
+        let payload = match serde_json::from_slice::<IpwhoisResponse>(&body) {
+            Ok(payload) => payload,
+            Err(error) => {
+                warn!(error = ?error, "failed to decode ipwhois lookup response");
+                return None;
+            }
+        };
+        let location = ipwhois_location_from_response(payload)?;
+        self.cache_location(ip, location.clone()).await;
+        Some(location)
+    }
+
+    async fn cached_location(&self, ip: IpAddr) -> Option<GeoIpLocation> {
+        let now = Instant::now();
+        let guard = self.cache.read().await;
+        let cached = guard.get(&ip)?;
+        (cached.expires_at > now).then(|| cached.location.clone())
+    }
+
+    async fn cache_location(&self, ip: IpAddr, location: GeoIpLocation) {
+        let mut guard = self.cache.write().await;
+        guard.insert(
+            ip,
+            CachedIpwhoisLocation {
+                location,
+                expires_at: Instant::now() + Duration::from_secs(IPWHOIS_CACHE_TTL_SECS),
+            },
+        );
+    }
+
+    async fn is_rate_limited(&self) -> bool {
+        let now = Instant::now();
+        let mut guard = self.retry_after.write().await;
+        match *guard {
+            Some(until) if until > now => true,
+            Some(_) => {
+                *guard = None;
+                false
+            }
+            None => false,
+        }
+    }
+
+    async fn set_retry_after(&self, headers: &reqwest::header::HeaderMap) {
+        let duration = headers
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_secs)
+            .unwrap_or_else(|| Duration::from_secs(IPWHOIS_RETRY_AFTER_FALLBACK_SECS));
+        let mut guard = self.retry_after.write().await;
+        *guard = Some(Instant::now() + duration);
+    }
+}
+
 fn should_skip_download(config: &GeoIpConfig) -> bool {
     !config.auto_update
-        || config.provider == GeoIpProvider::Custom
-        || database_is_fresh(&config.database_path, config.update_interval_days)
+        || config.provider != GeoIpProvider::Dbip
+        || (database_is_fresh(&config.database_path, config.update_interval_days)
+            && database_matches_edition(&config.database_path, config.edition))
+}
+
+fn ipwhois_lookup_url(endpoint: &str, ip: IpAddr) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(endpoint).context("parse ipwhois endpoint")?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("ipwhois endpoint cannot be a base URL"))?
+        .pop_if_empty()
+        .push(&ip.to_string());
+    url.query_pairs_mut().append_pair("fields", IPWHOIS_FIELDS);
+    Ok(url)
+}
+
+fn ipwhois_location_from_response(response: IpwhoisResponse) -> Option<GeoIpLocation> {
+    if !response.success {
+        return None;
+    }
+    let country = clean_location_text(response.country_code)
+        .map(|code| code.to_ascii_uppercase())
+        .or_else(|| clean_location_text(response.country))?;
+    let city = clean_location_text(response.city).or_else(|| clean_location_text(response.region));
+    let (latitude, longitude) = sanitize_ipwhois_coordinates(response.latitude, response.longitude);
+    sanitize_location_override(Some(country), city, latitude, longitude)
+        .ok()
+        .flatten()
+}
+
+fn clean_location_text(value: Option<String>) -> Option<String> {
+    let value = value?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn sanitize_ipwhois_coordinates(
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+) -> (Option<f64>, Option<f64>) {
+    match (latitude, longitude) {
+        (Some(latitude), Some(longitude))
+            if latitude.is_finite()
+                && longitude.is_finite()
+                && (-90.0..=90.0).contains(&latitude)
+                && (-180.0..=180.0).contains(&longitude) =>
+        {
+            (Some(latitude), Some(longitude))
+        }
+        _ => (None, None),
+    }
 }
 
 fn database_is_fresh(path: &Path, update_interval_days: u64) -> bool {
@@ -120,6 +357,21 @@ fn database_is_fresh(path: &Path, update_interval_days: u64) -> bool {
         return false;
     };
     age.as_secs() < update_interval_days.saturating_mul(24 * 60 * 60)
+}
+
+fn database_matches_edition(path: &Path, edition: GeoIpEdition) -> bool {
+    let Ok(reader) = maxminddb::Reader::open_readfile(path) else {
+        return false;
+    };
+    database_type_matches_edition(&reader.metadata.database_type, edition)
+}
+
+fn database_type_matches_edition(database_type: &str, edition: GeoIpEdition) -> bool {
+    let database_type = database_type.to_ascii_lowercase();
+    match edition {
+        GeoIpEdition::CountryLite => database_type.contains("country"),
+        GeoIpEdition::CityLite => database_type.contains("city"),
+    }
 }
 
 async fn download_dbip_database(config: &GeoIpConfig) -> Result<()> {
@@ -311,12 +563,20 @@ fn is_lan_ipv6(ip: Ipv6Addr) -> bool {
 #[cfg(test)]
 mod tests {
     use std::net::IpAddr;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use nodelite_proto::GeoIpEdition;
+    use nodelite_proto::{GeoIpConfig, GeoIpEdition, GeoIpProvider};
 
     use std::path::Path;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
-    use super::{dbip_download_url, dbip_download_urls, is_lan_ip, temporary_database_path};
+    use super::{
+        GeoIpResolver, IpwhoisResponse, database_type_matches_edition, dbip_download_url,
+        dbip_download_urls, ipwhois_location_from_response, is_lan_ip, temporary_database_path,
+    };
 
     #[test]
     fn lan_ip_detection_covers_private_and_documentation_ranges() {
@@ -343,6 +603,127 @@ mod tests {
         assert!(!is_lan_ip(public));
     }
 
+    #[tokio::test]
+    async fn ipwhois_provider_does_not_require_database_file() {
+        let resolver = GeoIpResolver::new(GeoIpConfig {
+            enabled: true,
+            provider: GeoIpProvider::Ipwhois,
+            edition: GeoIpEdition::CountryLite,
+            database_path: PathBuf::from("/definitely/missing/nodelite/ipwhois.mmdb"),
+            auto_update: false,
+            update_interval_days: 30,
+        })
+        .await;
+
+        assert!(resolver.prepare_database().await);
+    }
+
+    #[tokio::test]
+    async fn ipwhois_lookup_uses_online_api_and_cache() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let endpoint = format!(
+            "http://{}",
+            listener
+                .local_addr()
+                .expect("listener address should exist")
+        );
+        let hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("request should arrive");
+            server_hits.fetch_add(1, Ordering::SeqCst);
+            let mut request = [0_u8; 1024];
+            let _ = stream
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            let body = r#"{
+                "success": true,
+                "country": "United States",
+                "country_code": "US",
+                "region": "California",
+                "city": "Mountain View",
+                "latitude": 37.386,
+                "longitude": -122.0838
+            }"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("response should write");
+        });
+        let resolver = GeoIpResolver::new_with_ipwhois_endpoint(
+            GeoIpConfig {
+                enabled: true,
+                provider: GeoIpProvider::Ipwhois,
+                edition: GeoIpEdition::CountryLite,
+                database_path: PathBuf::from("/definitely/missing/nodelite/ipwhois.mmdb"),
+                auto_update: false,
+                update_interval_days: 30,
+            },
+            endpoint,
+        )
+        .await;
+        let ip: IpAddr = "8.8.8.8".parse().expect("test ip should parse");
+
+        let first = resolver
+            .lookup(ip)
+            .await
+            .expect("first lookup should resolve");
+        let second = resolver
+            .lookup(ip)
+            .await
+            .expect("second lookup should resolve");
+
+        assert_eq!(first.country, "US");
+        assert_eq!(first.city.as_deref(), Some("Mountain View"));
+        assert_eq!(second, first);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        server.await.expect("server task should finish");
+    }
+
+    #[test]
+    fn ipwhois_response_maps_to_geoip_location() {
+        let response: IpwhoisResponse = serde_json::from_str(
+            r#"{
+                "success": true,
+                "country": "Hong Kong",
+                "country_code": "HK",
+                "region": "Central and Western",
+                "city": "Hong Kong",
+                "latitude": 22.3193,
+                "longitude": 114.1694
+            }"#,
+        )
+        .expect("ipwhois fixture should parse");
+
+        let location = ipwhois_location_from_response(response).expect("location");
+
+        assert_eq!(location.country, "HK");
+        assert_eq!(location.city.as_deref(), Some("Hong Kong"));
+        assert_eq!(location.latitude, Some(22.3193));
+        assert_eq!(location.longitude, Some(114.1694));
+    }
+
+    #[test]
+    fn ipwhois_failed_response_is_ignored() {
+        let response: IpwhoisResponse = serde_json::from_str(
+            r#"{
+                "success": false,
+                "message": "Reserved range"
+            }"#,
+        )
+        .expect("ipwhois fixture should parse");
+
+        assert!(ipwhois_location_from_response(response).is_none());
+    }
+
     #[test]
     fn dbip_download_url_uses_requested_edition() {
         assert!(
@@ -353,6 +734,26 @@ mod tests {
             dbip_download_url(GeoIpEdition::CityLite, 2026, 6)
                 .contains("dbip-city-lite-2026-06.mmdb.gz")
         );
+    }
+
+    #[test]
+    fn dbip_database_type_must_match_requested_edition() {
+        assert!(database_type_matches_edition(
+            "DBIP-Country-Lite",
+            GeoIpEdition::CountryLite
+        ));
+        assert!(database_type_matches_edition(
+            "DBIP-City-Lite",
+            GeoIpEdition::CityLite
+        ));
+        assert!(!database_type_matches_edition(
+            "DBIP-Country-Lite",
+            GeoIpEdition::CityLite
+        ));
+        assert!(!database_type_matches_edition(
+            "DBIP-City-Lite",
+            GeoIpEdition::CountryLite
+        ));
     }
 
     #[test]

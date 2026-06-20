@@ -60,7 +60,7 @@ pub(crate) async fn update_alert_settings(
 
     {
         let mut alerting = state.alerting.write().await;
-        *alerting = next_config;
+        *alerting = std::sync::Arc::new(next_config);
     }
 
     Json(build_alert_settings_response(&state).await).into_response()
@@ -69,7 +69,7 @@ pub(crate) async fn update_alert_settings(
 async fn build_alert_settings_response(state: &AppState) -> AlertSettingsResponse {
     let alerting = {
         let alerting = state.alerting.read().await;
-        alerting.clone()
+        std::sync::Arc::clone(&alerting)
     };
     let statuses = state.shared.list_statuses().await;
     AlertSettingsResponse {
@@ -280,6 +280,10 @@ mod tests {
             geoip_city: None,
             geoip_latitude: None,
             geoip_longitude: None,
+            location_override_country: None,
+            location_override_city: None,
+            location_override_latitude: None,
+            location_override_longitude: None,
             latency_ms: Some(latency_ms),
         }
     }

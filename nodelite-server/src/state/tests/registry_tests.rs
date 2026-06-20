@@ -1,9 +1,12 @@
 use super::*;
-use nodelite_proto::NodeStatus;
+use nodelite_proto::{
+    AlertChannel, AlertComparator, AlertMetric, AlertRuleConfig, AlertScopeMode, AlertSeverity,
+    InspectionConfig, NodeStatus,
+};
 
 #[test]
 fn newer_session_replaces_older_one() {
-    let mut registry = Registry::default();
+    let registry = Registry::default();
     let now = Utc
         .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
         .single()
@@ -26,12 +29,14 @@ fn newer_session_replaces_older_one() {
         identity.clone(),
         Some("198.51.100.10".to_string()),
         None,
+        None,
         now,
     );
     registry.register_node(
         2,
         identity,
         Some("198.51.100.11".to_string()),
+        None,
         None,
         now + ChronoDuration::seconds(3),
     );
@@ -55,7 +60,7 @@ fn newer_session_replaces_older_one() {
 
 #[test]
 fn newer_session_refreshes_remote_ip_and_geoip() {
-    let mut registry = Registry::default();
+    let registry = Registry::default();
     let now = Utc
         .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
         .single()
@@ -72,6 +77,7 @@ fn newer_session_refreshes_remote_ip_and_geoip() {
             latitude: Some(37.386),
             longitude: Some(-122.0838),
         }),
+        None,
         now,
     );
     registry.register_node(
@@ -84,6 +90,7 @@ fn newer_session_refreshes_remote_ip_and_geoip() {
             latitude: Some(35.6762),
             longitude: Some(139.6503),
         }),
+        None,
         now + ChronoDuration::seconds(3),
     );
 
@@ -107,7 +114,7 @@ fn newer_session_refreshes_remote_ip_and_geoip() {
 
 #[test]
 fn stale_nodes_are_marked_offline() {
-    let mut registry = Registry::default();
+    let registry = Registry::default();
     let now = Utc
         .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
         .single()
@@ -117,6 +124,7 @@ fn stale_nodes_are_marked_offline() {
         7,
         sample_identity(),
         Some("198.51.100.10".to_string()),
+        None,
         None,
         now,
     );
@@ -135,7 +143,7 @@ fn stale_nodes_are_marked_offline() {
 
 #[test]
 fn session_control_is_only_available_for_current_online_session() {
-    let mut registry = Registry::default();
+    let registry = Registry::default();
     let now = Utc
         .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
         .single()
@@ -144,6 +152,7 @@ fn session_control_is_only_available_for_current_online_session() {
         7,
         sample_identity(),
         Some("198.51.100.10".to_string()),
+        None,
         None,
         now,
     );
@@ -157,6 +166,7 @@ fn session_control_is_only_available_for_current_online_session() {
         sample_identity(),
         Some("198.51.100.11".to_string()),
         None,
+        None,
         now + ChronoDuration::seconds(1),
     );
     assert!(
@@ -167,7 +177,7 @@ fn session_control_is_only_available_for_current_online_session() {
 
 #[test]
 fn mark_disconnected_clears_session_control() {
-    let mut registry = Registry::default();
+    let registry = Registry::default();
     let now = Utc
         .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
         .single()
@@ -177,6 +187,7 @@ fn mark_disconnected_clears_session_control() {
         sample_identity(),
         Some("198.51.100.10".to_string()),
         None,
+        None,
         now,
     );
 
@@ -185,6 +196,75 @@ fn mark_disconnected_clears_session_control() {
     registry.mark_disconnected("hk-01", 9);
 
     assert!(registry.session_control("hk-01").is_none());
+}
+
+#[test]
+fn registry_spreads_runtime_entries_across_shards() {
+    let registry = Registry::default();
+    let now = Utc
+        .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
+        .single()
+        .expect("valid test datetime");
+
+    for index in 0..64 {
+        let node_id = format!("node-{index:03}");
+        registry.register_node(
+            index,
+            NodeIdentity {
+                node_id: node_id.clone(),
+                node_label: node_id,
+                ..sample_identity()
+            },
+            Some("198.51.100.10".to_string()),
+            None,
+            None,
+            now,
+        );
+    }
+
+    let nodes_per_shard = registry.nodes_per_shard_for_test();
+    let populated_shards = nodes_per_shard.iter().filter(|count| **count > 0).count();
+    let first_shard = Registry::shard_index_for_test("node-000");
+    let has_different_shard = (1..64)
+        .any(|index| Registry::shard_index_for_test(&format!("node-{index:03}")) != first_shard);
+
+    assert_eq!(Registry::shard_count_for_test(), 32);
+    assert!(
+        populated_shards > 1,
+        "runtime entries should not all share one registry shard"
+    );
+    assert!(has_different_shard);
+    assert_eq!(nodes_per_shard.iter().sum::<usize>(), 64);
+}
+
+#[test]
+fn browser_view_holds_shard_locks_until_revision_capture() {
+    let registry = Registry::default();
+    let now = Utc
+        .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
+        .single()
+        .expect("valid test datetime");
+
+    registry.register_node(
+        1,
+        sample_identity(),
+        Some("198.51.100.10".to_string()),
+        None,
+        None,
+        now,
+    );
+
+    let (nodes, overview, revision) = registry.browser_view_with_revision(|| {
+        assert!(
+            registry.shard_is_read_locked_for_test("hk-01"),
+            "revision must be captured while the browser view still holds shard read locks"
+        );
+        7
+    });
+
+    assert_eq!(revision, 7);
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(overview.total_nodes, 1);
 }
 
 #[test]
@@ -229,6 +309,10 @@ fn runtime_entry_retained_heap_is_lower_than_cached_external_models() {
         geoip_city: Some("Hong Kong".to_string()),
         geoip_latitude: Some(22.3193),
         geoip_longitude: Some(114.1694),
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude: None,
+        location_override_longitude: None,
         snapshot: Some(snapshot),
         last_seen: Some(Utc::now()),
         latency_ms: Some(42),
@@ -263,6 +347,10 @@ async fn restore_statuses_reassembles_detail_and_lightweight_api_views() {
         geoip_city: Some("Hong Kong".to_string()),
         geoip_latitude: Some(22.3193),
         geoip_longitude: Some(114.1694),
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude: None,
+        location_override_longitude: None,
         snapshot: Some(snapshot),
         last_seen: Some(Utc::now()),
         latency_ms: Some(42),
@@ -301,7 +389,12 @@ async fn restore_statuses_reassembles_detail_and_lightweight_api_views() {
 async fn registry_disk_entries_total_counts_snapshot_disks() {
     let shared = SharedState::new(Arc::new(sample_config()));
     let first_session = shared
-        .register_node(sample_identity(), Some("198.51.100.10".to_string()), None)
+        .register_node(
+            sample_identity(),
+            Some("198.51.100.10".to_string()),
+            None,
+            None,
+        )
         .await;
     let second_session = shared
         .register_node(
@@ -311,6 +404,7 @@ async fn registry_disk_entries_total_counts_snapshot_disks() {
                 ..sample_identity()
             },
             Some("198.51.100.11".to_string()),
+            None,
             None,
         )
         .await;
@@ -336,11 +430,67 @@ async fn registry_disk_entries_total_counts_snapshot_disks() {
     assert_eq!(shared.registry_disk_entries_total().await, 5);
 }
 
+#[test]
+fn alert_evaluation_borrows_runtime_entries() {
+    let registry = Registry::default();
+    let now = Utc
+        .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
+        .single()
+        .expect("valid test datetime");
+    let mut identity = sample_identity();
+    identity.tags = vec!["edge".to_string()];
+    registry.register_node(
+        1,
+        identity,
+        Some("198.51.100.10".to_string()),
+        None,
+        None,
+        now,
+    );
+    let mut snapshot = sample_snapshot(now);
+    snapshot.cpu_usage_percent = Some(95.0);
+    assert!(
+        registry
+            .update_snapshot("hk-01", 1, snapshot, now)
+            .is_some()
+    );
+
+    let rule = AlertRuleConfig {
+        id: "cpu-hot".to_string(),
+        name: "CPU".to_string(),
+        enabled: true,
+        metric: AlertMetric::CpuUsagePercent,
+        comparator: AlertComparator::Gt,
+        threshold: 90,
+        window_minutes: 5,
+        severity: AlertSeverity::Critical,
+        scope_mode: AlertScopeMode::Tags,
+        node_ids: Vec::new(),
+        tags: vec!["edge".to_string()],
+        delivery: vec![AlertChannel::Smtp],
+        cooldown_minutes: 30,
+        send_resolved: true,
+    };
+
+    let matches = registry.evaluate_alert_rules(&[rule], now);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].node_id, "hk-01");
+
+    let inspection = InspectionConfig {
+        cpu_warn_percent: 90,
+        ..InspectionConfig::default()
+    };
+    let report = registry.build_alert_inspection_report(&inspection, now);
+    assert_eq!(report.total_nodes, 1);
+    assert_eq!(report.cpu_hot_nodes, 1);
+    assert_eq!(report.highlights[0].node_id, "hk-01");
+}
+
 #[tokio::test]
 async fn refresh_geoip_locations_updates_online_node_view() {
     let shared = SharedState::new(Arc::new(sample_config()));
     let _session_id = shared
-        .register_node(sample_identity(), Some("8.8.8.8".to_string()), None)
+        .register_node(sample_identity(), Some("8.8.8.8".to_string()), None, None)
         .await;
 
     assert_eq!(
@@ -379,10 +529,56 @@ async fn refresh_geoip_locations_updates_online_node_view() {
 }
 
 #[tokio::test]
+async fn location_override_updates_online_node_view() {
+    let shared = SharedState::new(Arc::new(sample_config()));
+    shared
+        .register_node(
+            sample_identity(),
+            Some("8.8.8.8".to_string()),
+            Some(GeoIpLocation {
+                country: "CN".to_string(),
+                city: Some("Shenyang".to_string()),
+                latitude: Some(41.8057),
+                longitude: Some(123.4315),
+            }),
+            None,
+        )
+        .await;
+
+    assert!(
+        shared
+            .update_location_override(
+                "hk-01",
+                Some(GeoIpLocation {
+                    country: "HK".to_string(),
+                    city: Some("Hong Kong".to_string()),
+                    latitude: Some(22.3193),
+                    longitude: Some(114.1694),
+                }),
+            )
+            .await
+    );
+
+    let status = shared.get_status("hk-01").await.expect("node status");
+    assert_eq!(status.geoip_country.as_deref(), Some("CN"));
+    assert_eq!(status.location_override_country.as_deref(), Some("HK"));
+    assert_eq!(status.location_override_city.as_deref(), Some("Hong Kong"));
+
+    let summary = shared
+        .list_node_summaries()
+        .await
+        .into_iter()
+        .find(|node| node.identity.node_id == "hk-01")
+        .expect("node summary");
+    assert_eq!(summary.location_override_country.as_deref(), Some("HK"));
+    assert_eq!(summary.location_override_latitude, Some(22.3193));
+}
+
+#[tokio::test]
 async fn refresh_geoip_locations_skips_stale_remote_ip() {
     let shared = SharedState::new(Arc::new(sample_config()));
     shared
-        .register_node(sample_identity(), Some("8.8.8.8".to_string()), None)
+        .register_node(sample_identity(), Some("8.8.8.8".to_string()), None, None)
         .await;
 
     let updated = shared

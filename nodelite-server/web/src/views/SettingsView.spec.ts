@@ -19,6 +19,13 @@ const FAKE_DICT = {
   en: {
     'settings.heading': 'Settings',
     'settings.subtitle': 'sub',
+    'settings.summary.version': 'Current Version',
+    'settings.summary.registered': 'Registered Agents',
+    'settings.summary.token_health': 'Token Health',
+    'settings.summary.token_good': 'Good',
+    'settings.summary.token_expiring': '{count} expiring',
+    'settings.summary.token_attention': '{count} expired',
+    'settings.summary.operations': 'Operations',
     'common.waiting_for_data': 'Waiting…',
     'common.language': 'Language',
     'common.theme_toggle': 'Toggle theme',
@@ -53,6 +60,16 @@ const FAKE_DICT = {
     'settings.tokens.ip': 'IP',
     'settings.tokens.expires_at': 'Expires',
     'settings.tokens.remaining': 'Remaining',
+    'settings.tokens.service_expires_at': 'Service expiry',
+    'settings.tokens.service_unlimited': 'Unlimited',
+    'settings.tokens.service_unlimited_short': 'No limit',
+    'settings.tokens.renewal_price': 'Renewal price',
+    'settings.tokens.renewal_price_placeholder': '$5/mo',
+    'settings.tokens.actions': 'Actions',
+    'settings.tokens.service_meta_save': 'Save',
+    'settings.tokens.service_meta_saving': 'Saving…',
+    'settings.tokens.service_meta_saved': 'Saved',
+    'settings.tokens.service_meta_failed': 'Save failed: {error}',
     'settings.token.no_expiry': 'No expiry',
     'settings.token.expired': 'Expired',
     'settings.duration.days_hours': '{days}d {hours}h',
@@ -116,6 +133,7 @@ describe('SettingsView', () => {
     const wrapper = await mountView();
     expect(mockSettings).toHaveBeenCalled();
     expect(wrapper.find('[data-test="settings-view"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="settings-summary"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="server-update-card"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="ops-card"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="token-table"]').exists()).toBe(true);

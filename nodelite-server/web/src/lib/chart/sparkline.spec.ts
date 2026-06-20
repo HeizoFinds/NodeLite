@@ -8,15 +8,23 @@ import {
   sparklineColor,
 } from './sparkline';
 
-function point(recorded_at: string, cpu: number | null): HistoryPoint {
+function point(
+  recorded_at: string,
+  cpu: number | null,
+  loadOne: number | null = null,
+): HistoryPoint {
   return {
     node_id: 'n',
     recorded_at,
     cpu_usage_percent: cpu,
+    load_one: loadOne,
+    load_five: null,
+    load_fifteen: null,
     memory_used_percent: 0,
     rx_bytes_per_sec: null,
     tx_bytes_per_sec: null,
     latency_ms: null,
+    packet_loss_percent: null,
     disk_used_percent: null,
   };
 }
@@ -89,23 +97,30 @@ describe('buildSparkline', () => {
     expect(spark!.width).toBe(200);
     expect(spark!.height).toBe(60);
   });
+
+  it('expands small load deltas instead of flattening them', () => {
+    const spark = buildSparkline([3.24, 3.28]);
+    expect(spark).not.toBeNull();
+    expect(spark!.line).toContain('52.0');
+    expect(spark!.line).toContain('8.0');
+  });
 });
 
 describe('nodeSparkPoints', () => {
   it('uses aggregated history when available', () => {
     const pts = nodeSparkPoints(
-      [point('2026-05-29T00:00:00Z', 10), point('2026-05-29T00:01:00Z', 20)],
+      [point('2026-05-29T00:00:00Z', 80, 0.1), point('2026-05-29T00:01:00Z', 90, 0.2)],
       99,
     );
-    expect(pts).toEqual([10, 20]);
+    expect(pts).toEqual([0.1, 0.2]);
   });
 
-  it('falls back to the current snapshot cpu when history is empty', () => {
-    expect(nodeSparkPoints([], 42)).toEqual([42]);
-    expect(nodeSparkPoints(undefined, 42)).toEqual([42]);
+  it('falls back to the current snapshot load when history is empty', () => {
+    expect(nodeSparkPoints([], 0.42)).toEqual([0.42]);
+    expect(nodeSparkPoints(undefined, 0.42)).toEqual([0.42]);
   });
 
-  it('returns [] when neither history nor current cpu is available', () => {
+  it('returns [] when neither history nor current load is available', () => {
     expect(nodeSparkPoints([], null)).toEqual([]);
     expect(nodeSparkPoints(undefined, undefined)).toEqual([]);
   });

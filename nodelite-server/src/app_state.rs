@@ -41,7 +41,9 @@ pub(crate) struct AppState {
     /// 同型但实例独立,使浏览器连接与 agent 连接各自计数、互不挤占配额。
     pub(crate) browser_ws_admission: WsAdmissionController,
     pub(crate) readonly_auth: Arc<RwLock<ReadonlyRouteAuth>>,
-    pub(crate) alerting: Arc<RwLock<AlertingConfig>>,
+    /// 内层 `Arc` 让告警运行时和投递任务以指针克隆共享配置快照,
+    /// 更新时整体替换内层 `Arc`(见 `handlers/settings/alerts.rs`)。
+    pub(crate) alerting: Arc<RwLock<Arc<AlertingConfig>>>,
     pub(crate) two_factor_sessions: TwoFactorSessions,
     pub(crate) config_path: Arc<PathBuf>,
     /// 进程级关停信号。axum graceful shutdown 之后由 `run_server` 触发,
@@ -107,6 +109,14 @@ impl AppState {
         let geoip = GeoIpResolver::new(config.geoip.clone()).await;
         let registry = NodeRegistry::load(config.node_registry_path.as_path()).await?;
 
+        let shutdown = CancellationToken::new();
+        let shared = SharedState::new(config.clone());
+        // 测试环境也启动集中 diff 任务,JoinHandle detach(测试结束时 shutdown token 取消)
+        std::mem::drop(crate::state::spawn_browser_incremental_task(
+            shared.clone(),
+            shutdown.clone(),
+        ));
+
         Ok(Self {
             history,
             agent_logs: AgentLogStore::new(),
@@ -126,16 +136,16 @@ impl AppState {
             ),
             readiness,
             registry,
-            shared: SharedState::new(config.clone()),
+            shared,
             ws_admission: WsAdmissionController::new(&config.ws),
             browser_ws_admission: WsAdmissionController::new(&config.ws),
             readonly_auth: Arc::new(RwLock::new(ReadonlyRouteAuth::from_config(
                 config.readonly_auth.clone(),
             ))),
-            alerting: Arc::new(RwLock::new(config.alerting.clone())),
+            alerting: Arc::new(RwLock::new(Arc::new(config.alerting.clone()))),
             two_factor_sessions: TwoFactorSessions::new(),
             config_path,
-            shutdown: CancellationToken::new(),
+            shutdown,
         })
     }
 }

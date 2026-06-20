@@ -3,8 +3,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use nodelite_proto::validate_non_empty;
+use lru::LruCache;
+use nodelite_proto::{validate_identifier, validate_non_empty};
+use parking_lot::Mutex as ParkingLotMutex;
 use tokio::sync::{RwLock, Semaphore};
+
+use crate::sanitize::{sanitize_location_override, sanitize_renewal_price};
 
 use super::auth::default_token_verify_limit;
 use super::storage::{
@@ -14,7 +18,8 @@ use super::storage::{
 use super::token::{constant_time_eq, generate_token, hash_token, prune_expired_install_sessions};
 use super::{
     ConsumedInstall, DEFAULT_TOKEN_VALIDITY_DAYS, NodeRegistry, RegisteredNode, RegistryError,
-    RegistryFile, RegistryReloadCheckpoint, RegistryResult,
+    RegistryFile, RegistryReloadCheckpoint, RegistryResult, TOKEN_CACHE_CAPACITY,
+    coordinate_to_microdegrees,
 };
 
 impl NodeRegistry {
@@ -32,6 +37,9 @@ impl NodeRegistry {
             registry_revision: Arc::new(AtomicU64::new(1)),
             token_verify_limit,
             token_verify_limiter: Arc::new(Semaphore::new(token_verify_limit)),
+            token_cache: Arc::new(ParkingLotMutex::new(LruCache::new(
+                std::num::NonZeroUsize::new(TOKEN_CACHE_CAPACITY).expect("cache capacity > 0"),
+            ))),
             #[cfg(test)]
             token_verify_probe: None,
         })
@@ -73,6 +81,8 @@ impl NodeRegistry {
             .await?;
 
         self.reload().await?;
+        // Token 轮换后清空整个缓存,避免旧 token 验证缓存残留。
+        self.token_cache.lock().clear();
 
         Ok((new_token, expires_at, generation))
     }
@@ -132,6 +142,94 @@ impl NodeRegistry {
                 .then_with(|| left.node_id.cmp(&right.node_id))
         });
         nodes
+    }
+
+    /// 更新设置页展示用的节点运营元数据。
+    pub async fn update_service_metadata(
+        &self,
+        node_id: &str,
+        service_expires_at: Option<DateTime<Utc>>,
+        service_unlimited: bool,
+        renewal_price: Option<String>,
+    ) -> RegistryResult<RegisteredNode> {
+        validate_identifier("node_id", node_id).map_err(RegistryError::validation)?;
+        let renewal_price =
+            sanitize_renewal_price(renewal_price).map_err(RegistryError::validation)?;
+        let service_expires_at = if service_unlimited {
+            None
+        } else {
+            service_expires_at
+        };
+        let node_id = node_id.to_string();
+        let path = Arc::clone(&self.path);
+        let (node, file) = mutate_registry_file(path.as_ref(), move |file| {
+            let Some(node) = file.nodes.iter_mut().find(|node| node.node_id == node_id) else {
+                return Err(RegistryError::NodeNotFound(node_id.clone()));
+            };
+            node.service_expires_at = service_expires_at;
+            node.service_unlimited = service_unlimited;
+            node.renewal_price = renewal_price.clone();
+            super::validate::validate_registered_node(node)?;
+            Ok((node.clone(), true))
+        })
+        .await?;
+
+        self.replace_state_from_file(file).await?;
+        Ok(node)
+    }
+
+    /// 更新设置页展示与地图落点使用的手动位置覆盖。
+    pub async fn update_location_override(
+        &self,
+        node_id: &str,
+        country: Option<String>,
+        city: Option<String>,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+    ) -> RegistryResult<RegisteredNode> {
+        validate_identifier("node_id", node_id).map_err(RegistryError::validation)?;
+        let location = sanitize_location_override(country, city, latitude, longitude)
+            .map_err(RegistryError::validation)?;
+        let node_id = node_id.to_string();
+        let path = Arc::clone(&self.path);
+        let (node, file) = mutate_registry_file(path.as_ref(), move |file| {
+            let Some(node) = file.nodes.iter_mut().find(|node| node.node_id == node_id) else {
+                return Err(RegistryError::NodeNotFound(node_id.clone()));
+            };
+            match location.as_ref() {
+                Some(location) => {
+                    node.location_override_country = Some(location.country.clone());
+                    node.location_override_city = location.city.clone();
+                    node.location_override_latitude_microdegrees =
+                        location.latitude.map(coordinate_to_microdegrees);
+                    node.location_override_longitude_microdegrees =
+                        location.longitude.map(coordinate_to_microdegrees);
+                }
+                None => {
+                    node.location_override_country = None;
+                    node.location_override_city = None;
+                    node.location_override_latitude_microdegrees = None;
+                    node.location_override_longitude_microdegrees = None;
+                }
+            }
+            super::validate::validate_registered_node(node)?;
+            Ok((node.clone(), true))
+        })
+        .await?;
+
+        self.replace_state_from_file(file).await?;
+        Ok(node)
+    }
+
+    pub async fn list_location_overrides(
+        &self,
+    ) -> Vec<(String, Option<nodelite_proto::GeoIpLocation>)> {
+        let state = self.state.read().await;
+        state
+            .entries
+            .values()
+            .map(|node| (node.node_id.clone(), node.location_override()))
+            .collect()
     }
 
     /// 返回当前注册表里的全部 node_id,用于跨模块做被动清理。

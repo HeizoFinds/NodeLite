@@ -12,11 +12,45 @@ fn validate_registered_node_rejects_oversized_tags() {
         tags: vec!["edge".to_string()],
         created_at: Utc::now(),
         token_expires_at: None,
+        service_expires_at: None,
+        service_unlimited: false,
+        renewal_price: None,
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude_microdegrees: None,
+        location_override_longitude_microdegrees: None,
     };
     node.tags = vec!["x".repeat(MAX_NODE_TAG_BYTES + 1)];
 
     let error = validate_registered_node(&node).expect_err("oversized tag should fail");
     assert!(error.to_string().contains("node.tags[0]"));
+}
+
+#[test]
+fn validate_registered_node_rejects_invalid_renewal_price() {
+    let mut node = RegisteredNode {
+        node_id: "hk-01".to_string(),
+        node_label: "Hong Kong 01".to_string(),
+        token_hash: "hash".to_string(),
+        token_generation: 1,
+        token: "secret-token".to_string(),
+        tags: vec!["edge".to_string()],
+        created_at: Utc::now(),
+        token_expires_at: None,
+        service_expires_at: None,
+        service_unlimited: false,
+        renewal_price: Some("bad\nprice".to_string()),
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude_microdegrees: None,
+        location_override_longitude_microdegrees: None,
+    };
+
+    let error = validate_registered_node(&node).expect_err("control chars should fail");
+    assert!(error.to_string().contains("renewal price"));
+
+    node.renewal_price = Some("$5/mo".to_string());
+    validate_registered_node(&node).expect("plain price should pass");
 }
 
 #[tokio::test]

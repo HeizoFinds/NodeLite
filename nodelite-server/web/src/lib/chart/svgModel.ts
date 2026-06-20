@@ -12,7 +12,7 @@ import {
   type ChartData,
   type ChartPoint,
 } from './chartData';
-import { formatChartValue, type ChartValueKind } from './format';
+import { formatChartAxisValue, type ChartValueKind } from './format';
 import { chartPadLeft, chartY, smoothPath } from './geometry';
 
 const PAD_RIGHT = 14;
@@ -96,6 +96,15 @@ export function networkSeries(
   ];
 }
 
+/** Load average series for 1/5/15 minute windows. */
+export function loadSeries(data: ChartData): MultiSeriesInput[] {
+  return [
+    { label: '1m', color: 'var(--chart-load-one)', points: data.loadOnePts },
+    { label: '5m', color: 'var(--chart-load-five)', points: data.loadFivePts },
+    { label: '15m', color: 'var(--chart-load-fifteen)', points: data.loadFifteenPts },
+  ];
+}
+
 function isFiniteValue(p: ChartPoint): p is ChartPoint & { value: number } {
   return p.value != null && Number.isFinite(Number(p.value));
 }
@@ -104,9 +113,14 @@ function isFiniteValue(p: ChartPoint): p is ChartPoint & { value: number } {
 // applied in the template, so only y + label are computed here.
 function buildGrid(bounds: ChartBounds, height: number, kind: ChartValueKind): ChartGridLine[] {
   const ratios = height < 100 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
+  const maxStep = Math.max(1, ratios.length - 1);
+  const step = (bounds.displayMax - bounds.displayMin) / maxStep;
   return ratios.map((ratio) => {
     const tick = bounds.displayMin + (bounds.displayMax - bounds.displayMin) * ratio;
-    return { y: chartY(tick, bounds, height, PAD_TOP, PAD_BOTTOM), label: formatChartValue(tick, kind) };
+    return {
+      y: chartY(tick, bounds, height, PAD_TOP, PAD_BOTTOM),
+      label: formatChartAxisValue(tick, kind, step),
+    };
   });
 }
 
@@ -148,6 +162,14 @@ function buildTimeTicks(points: HoverPoint[], width: number, padLeft: number): C
   return ticks;
 }
 
+function linePath(coords: HoverPoint[], width: number, padLeft: number): string {
+  if (coords.length === 1) {
+    const y = coords[0]!.y.toFixed(1);
+    return `M${padLeft.toFixed(1)},${y} L${(width - PAD_RIGHT).toFixed(1)},${y}`;
+  }
+  return smoothPath(coords.map((p) => [p.x, p.y]));
+}
+
 function longestTimedSeries(series: ChartSeriesModel[]): HoverPoint[] {
   return series.reduce<HoverPoint[]>((best, current) => {
     const timed = current.points.filter((p) => p.ts != null);
@@ -166,13 +188,14 @@ export function buildAreaChart(points: ChartPoint[], opts: AreaChartOptions): Ch
   const bounds = chartDisplayBounds(values, opts);
   const plotWidth = width - padLeft - PAD_RIGHT;
 
+  const singleX = padLeft + plotWidth / 2;
   const coords: HoverPoint[] = numeric.map((point, idx) => ({
-    x: padLeft + (plotWidth * idx) / Math.max(numeric.length - 1, 1),
+    x: numeric.length === 1 ? singleX : padLeft + (plotWidth * idx) / (numeric.length - 1),
     y: chartY(point.value, bounds, height, PAD_TOP, PAD_BOTTOM),
     value: point.value,
     ts: point.ts,
   }));
-  const line = smoothPath(coords.map((p) => [p.x, p.y]));
+  const line = linePath(coords, width, padLeft);
   const area = `${line}L ${width - PAD_RIGHT},${height - PAD_BOTTOM} L ${padLeft},${height - PAD_BOTTOM} Z`;
   const avg = averageValue(numeric);
 
@@ -217,10 +240,11 @@ export function buildMultiAreaChart(series: MultiSeriesInput[], opts: ChartOptio
 
   const built: ChartSeriesModel[] = valid.map((s) => {
     const coords: HoverPoint[] = [];
+    const singleX = padLeft + plotWidth / 2;
     s.points.forEach((point, idx) => {
       if (!isFiniteValue(point)) return;
       coords.push({
-        x: padLeft + (plotWidth * idx) / Math.max(longest - 1, 1),
+        x: longest === 1 ? singleX : padLeft + (plotWidth * idx) / (longest - 1),
         y: chartY(point.value, bounds, height, PAD_TOP, PAD_BOTTOM),
         value: point.value,
         ts: point.ts,
@@ -231,7 +255,7 @@ export function buildMultiAreaChart(series: MultiSeriesInput[], opts: ChartOptio
       label: s.label,
       color: s.color,
       kind,
-      line: smoothPath(coords.map((p) => [p.x, p.y])),
+      line: linePath(coords, width, padLeft),
       avgY: avg == null ? null : chartY(avg, bounds, height, PAD_TOP, PAD_BOTTOM),
       avgOpacity: 0.3,
       points: coords,

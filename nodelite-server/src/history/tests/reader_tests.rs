@@ -21,6 +21,10 @@ fn history_point_uses_server_last_seen_timestamp() {
         geoip_city: None,
         geoip_latitude: None,
         geoip_longitude: None,
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude: None,
+        location_override_longitude: None,
         snapshot: Some(NodeSnapshot {
             collected_at: now + Duration::hours(24),
             cpu_usage_percent: Some(42.0),
@@ -43,6 +47,7 @@ fn history_point_uses_server_last_seen_timestamp() {
                 total_tx_bytes: 2,
                 rx_bytes_per_sec: Some(3.0),
                 tx_bytes_per_sec: Some(4.0),
+                packet_loss_percent: Some(0.5),
             },
         }),
         last_seen: Some(now),
@@ -52,6 +57,9 @@ fn history_point_uses_server_last_seen_timestamp() {
 
     let point = build_history_point(&status).expect("history point should exist");
     assert_eq!(point.recorded_at, now);
+    assert_eq!(point.load_one, Some(0.1));
+    assert_eq!(point.load_five, Some(0.2));
+    assert_eq!(point.load_fifteen, Some(0.3));
 }
 
 #[test]
@@ -74,10 +82,14 @@ fn query_history_between_buckets_and_limits_results() {
                 node_id: "hk-01".to_string(),
                 recorded_at: start + Duration::seconds(index * 120),
                 cpu_usage_percent: Some(index as f64),
+                load_one: Some(index as f64 / 10.0),
+                load_five: Some(index as f64 / 20.0),
+                load_fifteen: Some(index as f64 / 30.0),
                 memory_used_percent: 50.0,
                 rx_bytes_per_sec: Some(index as f64),
                 tx_bytes_per_sec: Some(index as f64 / 2.0),
                 latency_ms: Some((index % 10) as u64),
+                packet_loss_percent: Some(index as f64 / 100.0),
                 disk_used_percent: Some(60.0),
             },
             None,
@@ -95,6 +107,7 @@ fn query_history_between_buckets_and_limits_results() {
             .windows(2)
             .all(|pair| pair[0].recorded_at <= pair[1].recorded_at)
     );
+    assert!(points.iter().any(|point| point.load_one.is_some()));
 
     let _ = std::fs::remove_file(&db_path);
     let _ = std::fs::remove_dir(&temp_dir);
@@ -178,10 +191,14 @@ async fn concurrent_history_queries_use_independent_read_connections() {
                 node_id: "hk-01".to_string(),
                 recorded_at: start + Duration::seconds(index * 30),
                 cpu_usage_percent: Some(index as f64),
+                load_one: Some(index as f64 / 10.0),
+                load_five: Some(index as f64 / 20.0),
+                load_fifteen: Some(index as f64 / 30.0),
                 memory_used_percent: 50.0,
                 rx_bytes_per_sec: Some(index as f64),
                 tx_bytes_per_sec: Some(index as f64 / 2.0),
                 latency_ms: Some((index % 10) as u64),
+                packet_loss_percent: Some(index as f64 / 100.0),
                 disk_used_percent: Some(60.0),
             },
             None,

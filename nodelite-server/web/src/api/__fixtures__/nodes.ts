@@ -59,6 +59,17 @@ export function makeSettings(overrides: Partial<SettingsResponse> = {}): Setting
         tags: [],
         token_expires_at: '2026-12-01T00:00:00Z',
         token_expires_in_secs: 1_000_000,
+        service_expires_at: null,
+        service_unlimited: false,
+        renewal_price: null,
+        geoip_country: null,
+        geoip_city: null,
+        geoip_latitude: null,
+        geoip_longitude: null,
+        location_override_country: null,
+        location_override_city: null,
+        location_override_latitude: null,
+        location_override_longitude: null,
       },
     ],
   };
@@ -106,6 +117,20 @@ export function makeNode(overrides: Partial<NodeListItem> = {}): NodeListItem {
     geoip_city: 'geoip_city' in overrides ? (overrides.geoip_city ?? null) : null,
     geoip_latitude: 'geoip_latitude' in overrides ? (overrides.geoip_latitude ?? null) : null,
     geoip_longitude: 'geoip_longitude' in overrides ? (overrides.geoip_longitude ?? null) : null,
+    location_override_country:
+      'location_override_country' in overrides
+        ? (overrides.location_override_country ?? null)
+        : null,
+    location_override_city:
+      'location_override_city' in overrides ? (overrides.location_override_city ?? null) : null,
+    location_override_latitude:
+      'location_override_latitude' in overrides
+        ? (overrides.location_override_latitude ?? null)
+        : null,
+    location_override_longitude:
+      'location_override_longitude' in overrides
+        ? (overrides.location_override_longitude ?? null)
+        : null,
     snapshot: 'snapshot' in overrides ? (overrides.snapshot ?? null) : defaultSnapshot,
     latency_ms: 'latency_ms' in overrides ? (overrides.latency_ms ?? null) : 5,
     online: 'online' in overrides ? (overrides.online ?? false) : true,
@@ -132,6 +157,20 @@ export function makeNodeStatus(overrides: Partial<NodeStatus> = {}): NodeStatus 
     geoip_city: 'geoip_city' in overrides ? (overrides.geoip_city ?? null) : null,
     geoip_latitude: 'geoip_latitude' in overrides ? (overrides.geoip_latitude ?? null) : null,
     geoip_longitude: 'geoip_longitude' in overrides ? (overrides.geoip_longitude ?? null) : null,
+    location_override_country:
+      'location_override_country' in overrides
+        ? (overrides.location_override_country ?? null)
+        : null,
+    location_override_city:
+      'location_override_city' in overrides ? (overrides.location_override_city ?? null) : null,
+    location_override_latitude:
+      'location_override_latitude' in overrides
+        ? (overrides.location_override_latitude ?? null)
+        : null,
+    location_override_longitude:
+      'location_override_longitude' in overrides
+        ? (overrides.location_override_longitude ?? null)
+        : null,
     snapshot:
       'snapshot' in overrides
         ? (overrides.snapshot ?? null)
@@ -163,6 +202,7 @@ export function makeNodeStatus(overrides: Partial<NodeStatus> = {}): NodeStatus 
               total_tx_bytes: 2000,
               rx_bytes_per_sec: 10,
               tx_bytes_per_sec: 20,
+              packet_loss_percent: 0.2,
             },
           },
     last_seen: 'last_seen' in overrides ? (overrides.last_seen ?? null) : '2026-05-29T00:00:00Z',

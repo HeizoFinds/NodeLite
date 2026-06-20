@@ -76,6 +76,7 @@ fn exporter_exposes_snapshot_resource_metrics_for_each_node() {
             "nodelite_node_network_bytes_total{node_id=\"node-1\",direction=\"rx\"} 1500"
         )
     );
+    assert!(body.contains("nodelite_node_network_packet_loss_ratio{node_id=\"node-1\"} 0.005"));
 }
 
 #[test]
@@ -92,6 +93,7 @@ fn exporter_omits_snapshot_resource_metrics_by_default() {
             export_node_resource_metrics: true,
             export_node_disk_metrics: true,
         },
+        None,
     );
 
     assert!(body.contains("nodelite_node_info{"));
@@ -104,6 +106,7 @@ fn exporter_omits_snapshot_resource_metrics_by_default() {
         "nodelite_node_load_average{",
         "nodelite_node_network_bytes_total{",
         "nodelite_node_network_rate_bytes_per_second{",
+        "nodelite_node_network_packet_loss_ratio{",
         "nodelite_node_disk_bytes{",
     ] {
         assert!(!body.contains(metric), "default /metrics exported {metric}");
@@ -127,6 +130,7 @@ fn exporter_can_enable_disk_metrics_explicitly() {
             export_node_disk_metrics: true,
             ..MetricsConfig::default()
         },
+        None,
     );
 
     assert!(body.contains(
@@ -156,6 +160,7 @@ fn exporter_skips_unknown_cpu_usage() {
             export_node_resource_metrics: true,
             ..MetricsConfig::default()
         },
+        None,
     );
 
     assert_eq!(
@@ -180,6 +185,7 @@ fn render_detailed_prometheus_metrics() -> String {
             export_node_resource_metrics: true,
             ..MetricsConfig::default()
         },
+        None,
     )
 }
 
@@ -376,6 +382,10 @@ fn sample_status(node_id: &str, node_label: &str, uptime_secs: u64, load_15m: f6
         geoip_city: None,
         geoip_latitude: None,
         geoip_longitude: None,
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude: None,
+        location_override_longitude: None,
         snapshot: Some(NodeSnapshot {
             collected_at: Utc::now(),
             cpu_usage_percent: Some(42.0),
@@ -406,6 +416,7 @@ fn sample_status(node_id: &str, node_label: &str, uptime_secs: u64, load_15m: f6
                 total_tx_bytes: 900,
                 rx_bytes_per_sec: Some(128.0),
                 tx_bytes_per_sec: Some(64.0),
+                packet_loss_percent: Some(0.5),
             },
         }),
         last_seen: Some(Utc::now()),
@@ -426,4 +437,32 @@ fn sample_overview() -> OverviewData {
         current_tx_bytes_per_sec: 128.0,
         average_latency_ms: Some(12.0),
     }
+}
+
+#[test]
+fn exporter_exposes_string_pool_size_when_provided() {
+    let readiness = ServerReadiness::new(true);
+    let overview = sample_overview();
+    let statuses = sample_statuses();
+
+    // Without string pool size
+    let body_without = render_prometheus_metrics_from_iter(
+        &readiness,
+        statuses.iter().map(PrometheusNode::from_status),
+        &overview,
+        MetricsConfig::default(),
+        None,
+    );
+    assert!(!body_without.contains("nodelite_string_pool_entries"));
+
+    // With string pool size
+    let body_with = render_prometheus_metrics_from_iter(
+        &readiness,
+        statuses.iter().map(PrometheusNode::from_status),
+        &overview,
+        MetricsConfig::default(),
+        Some(42),
+    );
+    assert!(body_with.contains("# TYPE nodelite_string_pool_entries gauge"));
+    assert!(body_with.contains("nodelite_string_pool_entries 42"));
 }

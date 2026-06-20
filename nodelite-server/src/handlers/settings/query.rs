@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -5,6 +7,7 @@ use chrono::Utc;
 
 use crate::AppState;
 use crate::auth::{TWO_FACTOR_AUTH_SECS, TWO_FACTOR_PENDING_SECS};
+use crate::encoding::shell_quote;
 use nodelite_proto::DEFAULT_HISTORY_RETENTION_HOURS;
 
 use super::{
@@ -42,10 +45,28 @@ pub(crate) async fn settings(State(state): State<AppState>) -> impl IntoResponse
                 token_expires_in_secs: node
                     .token_expires_at
                     .map(|expires_at| (expires_at - now).num_seconds()),
+                service_expires_at: node.service_expires_at,
+                service_unlimited: node.service_unlimited,
+                renewal_price: node.renewal_price,
+                geoip_country: status.and_then(|status| status.geoip_country.clone()),
+                geoip_city: status.and_then(|status| status.geoip_city.clone()),
+                geoip_latitude: status.and_then(|status| status.geoip_latitude),
+                geoip_longitude: status.and_then(|status| status.geoip_longitude),
+                location_override_country: node.location_override_country,
+                location_override_city: node.location_override_city,
+                location_override_latitude: node
+                    .location_override_latitude_microdegrees
+                    .map(|value| f64::from(value) / 1_000_000.0),
+                location_override_longitude: node
+                    .location_override_longitude_microdegrees
+                    .map(|value| f64::from(value) / 1_000_000.0),
             }
         })
         .collect();
     let auth = runtime_auth.as_ref();
+    let server_executable = std::env::args()
+        .next()
+        .unwrap_or_else(|| "nodelite-server".to_string());
     Json(SettingsResponse {
         service: "nodelite-server",
         server_version: server_build_version(),
@@ -69,13 +90,37 @@ pub(crate) async fn settings(State(state): State<AppState>) -> impl IntoResponse
         updates: SettingsUpdates {
             latest_release_url: format!("{}/releases/latest", env!("CARGO_PKG_REPOSITORY")),
             server_upgrade_command: "curl -fsSL https://github.com/HeizoFinds/NodeLite/releases/latest/download/install-server.sh | sudo NODELITE_SERVER_MODE=upgrade sh".to_string(),
-            agent_upgrade_command: format!(
-                "{} upgrade-agent",
-                std::env::args()
-                    .next()
-                    .unwrap_or_else(|| "nodelite-server".to_string())
+            agent_upgrade_command: build_agent_upgrade_command(
+                &server_executable,
+                state.config_path.as_path(),
             ),
         },
         agents,
     })
+}
+
+fn build_agent_upgrade_command(executable: &str, config_path: &Path) -> String {
+    format!(
+        "{} --config {} upgrade-agent",
+        shell_quote(executable),
+        shell_quote(&config_path.display().to_string())
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::build_agent_upgrade_command;
+
+    #[test]
+    fn agent_upgrade_command_includes_active_config_path() {
+        assert_eq!(
+            build_agent_upgrade_command(
+                "/usr/local/bin/nodelite-server",
+                Path::new("/ssd/nodelite/config/server.toml")
+            ),
+            "'/usr/local/bin/nodelite-server' --config '/ssd/nodelite/config/server.toml' upgrade-agent"
+        );
+    }
 }

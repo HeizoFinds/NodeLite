@@ -18,6 +18,7 @@ pub(crate) fn render_prometheus_metrics(
         statuses.iter().map(PrometheusNode::from_status),
         overview,
         MetricsConfig::default(),
+        None,
     )
 }
 
@@ -26,9 +27,10 @@ pub(crate) fn render_prometheus_metrics_from_iter<'a>(
     statuses: impl IntoIterator<Item = PrometheusNode<'a>>,
     overview: &OverviewData,
     metrics_config: MetricsConfig,
+    string_pool_size: Option<usize>,
 ) -> String {
     let mut emitter = MetricEmitter::default();
-    render_server_metrics(&mut emitter, readiness);
+    render_server_metrics(&mut emitter, readiness, string_pool_size);
     render_overview_metrics(&mut emitter, overview);
     for status in statuses {
         render_node_metrics(&mut emitter, status, metrics_config);
@@ -425,7 +427,11 @@ pub(crate) fn render_metrics_response_body_bytes(bytes: u64) -> String {
     emitter.finish()
 }
 
-fn render_server_metrics(emitter: &mut MetricEmitter, readiness: &ServerReadiness) {
+fn render_server_metrics(
+    emitter: &mut MetricEmitter,
+    readiness: &ServerReadiness,
+    string_pool_size: Option<usize>,
+) {
     emitter.gauge(
         "nodelite_server_ready",
         "Whether the NodeLite server is ready to serve protected traffic.",
@@ -448,6 +454,14 @@ fn render_server_metrics(emitter: &mut MetricEmitter, readiness: &ServerReadines
             0
         },
     );
+    if let Some(size) = string_pool_size {
+        emitter.gauge(
+            "nodelite_string_pool_entries",
+            "Number of unique strings in the interning pool (monotonically increasing).",
+            &[],
+            size as i64,
+        );
+    }
 }
 
 fn render_overview_metrics(emitter: &mut MetricEmitter, overview: &OverviewData) {
@@ -646,6 +660,18 @@ fn render_network_metrics(emitter: &mut MetricEmitter, node_id: &str, snapshot: 
                 value,
             );
         }
+    }
+    if let Some(packet_loss_percent) = snapshot
+        .network
+        .packet_loss_percent
+        .filter(|value| value.is_finite())
+    {
+        emitter.gauge(
+            "nodelite_node_network_packet_loss_ratio",
+            "Latest aggregate network packet loss ratio reported by the node in the range 0..1.",
+            &[("node_id", node_id)],
+            packet_loss_percent / 100.0,
+        );
     }
 }
 

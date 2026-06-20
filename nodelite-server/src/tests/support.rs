@@ -132,11 +132,19 @@ pub(crate) fn json_request(
     request
 }
 
-pub(crate) fn json_write_routes() -> [(&'static str, Option<&'static str>); 7] {
+pub(crate) fn json_write_routes() -> [(&'static str, Option<&'static str>); 9] {
     [
         ("/api/verify-2fa", None),
         (
             "/api/nodes/test-node/refresh-token",
+            Some(TEST_BASIC_AUTH_HEADER),
+        ),
+        (
+            "/api/nodes/test-node/service-meta",
+            Some(TEST_BASIC_AUTH_HEADER),
+        ),
+        (
+            "/api/nodes/test-node/location-override",
             Some(TEST_BASIC_AUTH_HEADER),
         ),
         ("/api/settings/password", Some(TEST_BASIC_AUTH_HEADER)),
@@ -147,7 +155,7 @@ pub(crate) fn json_write_routes() -> [(&'static str, Option<&'static str>); 7] {
     ]
 }
 
-pub(crate) fn small_json_write_requests() -> [(&'static str, Option<&'static str>, &'static str); 7]
+pub(crate) fn small_json_write_requests() -> [(&'static str, Option<&'static str>, &'static str); 9]
 {
     [
         ("/api/verify-2fa", None, r#"{"code":"000000"}"#),
@@ -155,6 +163,16 @@ pub(crate) fn small_json_write_requests() -> [(&'static str, Option<&'static str
             "/api/nodes/test-node/refresh-token",
             Some(TEST_BASIC_AUTH_HEADER),
             r#"{"current_password":"wrong"}"#,
+        ),
+        (
+            "/api/nodes/test-node/service-meta",
+            Some(TEST_BASIC_AUTH_HEADER),
+            r#"{"service_expires_at":null,"service_unlimited":false,"renewal_price":"$5/mo"}"#,
+        ),
+        (
+            "/api/nodes/test-node/location-override",
+            Some(TEST_BASIC_AUTH_HEADER),
+            r#"{"country":"HK","city":"Hong Kong","latitude":22.3193,"longitude":114.1694}"#,
         ),
         (
             "/api/settings/password",

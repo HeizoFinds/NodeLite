@@ -49,6 +49,7 @@ const FAKE_DICT = {
     'node.uptime.days_hours': '{days}d {hours}h {minutes}m',
     'node.uptime.hours_minutes': '{hours}h {minutes}m',
     'node.uptime.minutes': '{minutes}m',
+    'node.history_window': 'History Window',
     'node.disk_usage': 'Disk Usage',
     'node.load': 'Load',
     'node.no_disks': 'No disk metrics.',
@@ -60,7 +61,33 @@ const FAKE_DICT = {
     'node.cpu_usage': 'CPU Usage',
     'node.memory_usage': 'Memory Usage',
     'node.network_traffic': 'Network Traffic',
+    'node.network.live': 'Live',
+    'node.network.quality': 'Quality',
+    'node.network.link_health': 'Link Health',
+    'node.network.packet_loss': 'Packet Loss',
+    'node.network.loss_history': 'Loss History',
+    'node.network.rtt': 'RTT',
+    'node.network.status': 'Status',
+    'node.network.avg_rtt': 'Avg RTT',
+    'node.network.peak_rate': 'Peak Rate',
+    'node.network.samples': 'Samples',
+    'node.network.samples_count': '{count} samples',
+    'node.network.received': 'Received',
+    'node.network.transmitted': 'Transmitted',
+    'node.network.total_traffic': 'Total Traffic',
+    'node.network.active_rate': 'Active Rate',
+    'node.network.totals': 'Totals',
+    'node.network.traffic_mix': 'Traffic Mix',
+    'node.network.total_value': 'Total {value}',
+    'node.network.avg_empty': 'Avg —',
+    'node.network.avg_value': 'Avg {value}',
     'node.latency_history': 'RTT',
+    'node.mounted_disks': 'Mounted Disks',
+    'node.stats.cpu': 'CPU',
+    'node.stats.memory': 'Memory',
+    'node.stats.swap': 'Swap',
+    'node.stats.load': 'Load 1/5/15',
+    'node.stats.latency': 'Latency',
     'node.chart.average': 'Avg {value}',
     'node.chart.zoom': 'Open enlarged chart',
     'node.clip.on': 'Clip Spikes: On',
@@ -73,6 +100,19 @@ const FAKE_DICT = {
     'node.preset.last_3d': '3d',
     'node.preset.last_7d': '7d',
     'node.preset.last_14d': '14d',
+    'node.hardware.system': 'System',
+    'node.hardware.storage': 'Storage',
+    'node.hardware.filesystems': 'Filesystem Distribution',
+    'node.hardware.total': 'Total',
+    'node.hardware.used': 'Used',
+    'node.hardware.available': 'Available',
+    'node.hardware.cores': 'cores',
+    'node.hardware.load_hint': '1 / 5 / 15 minute windows',
+    'node.hardware.partitions': 'Partitions',
+    'node.hardware.partition_count': '{count} partitions',
+    'node.hardware.health.title': 'Hardware Health',
+    'node.hardware.health.summary': 'Signal Summary',
+    'node.hardware.health.status': 'Node Status',
     'node.logs.empty': 'No logs.',
     'node.logs.load_failed': 'Failed: {error}',
     'node.logs.level_info': 'Info',
@@ -127,7 +167,12 @@ describe('NodeDetailView', () => {
     __resetI18nForTest();
     mockStatus.mockResolvedValue(
       makeNodeStatus({
-        identity: { ...makeNodeStatus().identity, node_id: 'srv-1', node_label: 'Server One', tags: ['ip:10.0.0.9', 'region:eu'] },
+        identity: {
+          ...makeNodeStatus().identity,
+          node_id: 'srv-1',
+          node_label: 'Server One',
+          tags: ['ip:10.0.0.9', 'region:eu'],
+        },
         online: true,
         latency_ms: 12,
       }),
@@ -167,7 +212,12 @@ describe('NodeDetailView', () => {
   it('annotates LAN IPs in the detail header', async () => {
     mockStatus.mockResolvedValueOnce(
       makeNodeStatus({
-        identity: { ...makeNodeStatus().identity, node_id: 'srv-lan', node_label: 'LAN Node', tags: [] },
+        identity: {
+          ...makeNodeStatus().identity,
+          node_id: 'srv-lan',
+          node_label: 'LAN Node',
+          tags: [],
+        },
         remote_ip: '100.64.0.8',
         geoip_country: 'LAN',
       }),
@@ -177,11 +227,12 @@ describe('NodeDetailView', () => {
     expect(wrapper.find('[data-test="node-meta"]').text()).toContain('IP: 100.64.0.8 (LAN)');
   });
 
-  it('renders the six tabs including settings', async () => {
+  it('renders the five tabs including settings', async () => {
     const { wrapper } = await mountDetail();
-    for (const tab of ['overview', 'monitor', 'network', 'hardware', 'logs', 'settings']) {
+    for (const tab of ['overview', 'network', 'hardware', 'logs', 'settings']) {
       expect(wrapper.find(`[data-test="tab-${tab}"]`).exists()).toBe(true);
     }
+    expect(wrapper.find('[data-test="tab-monitor"]').exists()).toBe(false);
   });
 
   it('defaults to the overview tab and switches via the URL hash', async () => {
@@ -189,51 +240,53 @@ describe('NodeDetailView', () => {
     expect(wrapper.find('[data-test="node-tab-pane"]').attributes('data-pane')).toBe('overview');
     expect(wrapper.find('[data-test="tab-overview"]').classes()).toContain('active');
 
-    await wrapper.find('[data-test="tab-monitor"]').trigger('click');
+    await wrapper.find('[data-test="tab-network"]').trigger('click');
     await flushPromises();
-    expect(wrapper.find('[data-test="node-tab-pane"]').attributes('data-pane')).toBe('monitor');
-    expect(wrapper.find('[data-test="tab-monitor"]').classes()).toContain('active');
+    expect(wrapper.find('[data-test="node-tab-pane"]').attributes('data-pane')).toBe('network');
+    expect(wrapper.find('[data-test="tab-network"]').classes()).toContain('active');
   });
 
-  it('renders overview content (info panel + summary + charts) and loads history', async () => {
+  it('renders the combined overview and loads high-res monitor history', async () => {
     const { wrapper } = await mountDetail('srv-1');
-    expect(wrapper.find('[data-test="node-info-panel"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="node-summary-cards"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="overview-charts"]').exists()).toBe(true);
-    // overview is a history tab → overview history fetched on mount
-    expect(mockHistory).toHaveBeenCalledWith('srv-1', expect.objectContaining({ windowHours: 336 }));
+    expect(wrapper.find('[data-test="node-combined-overview"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="overview-summary-cards"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="overview-monitor-charts"]').exists()).toBe(true);
+    expect(mockHistory).toHaveBeenCalledWith('srv-1', { windowHours: 24, maxPoints: 720 });
   });
 
   it('shows the network pane on the network tab', async () => {
     const { wrapper, router } = await mountDetail('srv-1');
+    mockHistory.mockClear();
     await router.replace({ hash: '#network' });
     await flushPromises();
     expect(wrapper.find('[data-test="network-pane"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="network-quality-card"]').exists()).toBe(true);
+    expect(mockHistory).toHaveBeenCalledWith(
+      'srv-1',
+      expect.objectContaining({ windowHours: 336 }),
+    );
   });
 
   it('shows disks on the hardware tab', async () => {
     const { wrapper, router } = await mountDetail('srv-1');
     await router.replace({ hash: '#hardware' });
     await flushPromises();
+    expect(wrapper.find('[data-test="node-hardware-panel"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="node-disks"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="node-info-panel"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="hardware-health-card"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="node-info-panel"]').exists()).toBe(false);
   });
 
-  it('shows monitor charts and loads high-res history on the monitor tab', async () => {
-    const { wrapper, router } = await mountDetail('srv-1');
+  it('loads a new high-res history window when an overview preset is selected', async () => {
+    const { wrapper } = await mountDetail('srv-1');
     mockHistory.mockClear();
-    await router.replace({ hash: '#monitor' });
+    await wrapper.find('[data-test="preset-last_7d"]').trigger('click');
     await flushPromises();
-    expect(wrapper.find('[data-test="monitor-charts"]').exists()).toBe(true);
-    // default 24h preset, high-res 720 points
-    expect(mockHistory).toHaveBeenCalledWith('srv-1', { windowHours: 24, maxPoints: 720 });
+    expect(mockHistory).toHaveBeenCalledWith('srv-1', { windowHours: 168, maxPoints: 720 });
   });
 
-  it('opens the zoom modal from a monitor chart and closes it', async () => {
-    const { wrapper, router } = await mountDetail('srv-1');
-    await router.replace({ hash: '#monitor' });
-    await flushPromises();
-
+  it('opens the zoom modal from an overview chart and closes it', async () => {
+    const { wrapper } = await mountDetail('srv-1');
     await wrapper.find('[data-test="zoom-cpu"]').trigger('click');
     await flushPromises();
     expect(wrapper.find('[data-test="chart-modal"]').exists()).toBe(true);
@@ -241,6 +294,25 @@ describe('NodeDetailView', () => {
     await wrapper.find('[data-test="chart-modal-close"]').trigger('click');
     await flushPromises();
     expect(wrapper.find('[data-test="chart-modal"]').exists()).toBe(false);
+  });
+
+  it('closes the zoom modal when leaving the overview tab', async () => {
+    const { wrapper, router } = await mountDetail('srv-1');
+    await wrapper.find('[data-test="zoom-cpu"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="chart-modal"]').exists()).toBe(true);
+
+    await router.replace({ hash: '#network' });
+    await flushPromises();
+    expect(wrapper.find('[data-test="chart-modal"]').exists()).toBe(false);
+  });
+
+  it('falls back to overview for the old monitor hash', async () => {
+    const { wrapper, router } = await mountDetail('srv-1');
+    await router.replace({ hash: '#monitor' });
+    await flushPromises();
+    expect(wrapper.find('[data-test="node-tab-pane"]').attributes('data-pane')).toBe('overview');
+    expect(wrapper.find('[data-test="node-combined-overview"]').exists()).toBe(true);
   });
 
   it('shows the log panel and loads logs on the logs tab', async () => {

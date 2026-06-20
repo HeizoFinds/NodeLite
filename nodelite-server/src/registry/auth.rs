@@ -8,6 +8,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use nodelite_proto::{NodeIdentity, validate_non_empty};
+use sha2::{Digest, Sha256};
 #[cfg(test)]
 use tokio::sync::Semaphore;
 use tracing::warn;
@@ -16,7 +17,8 @@ use super::token::{authorized_node_from_entry, constant_time_eq, verify_token};
 use super::validate::validate_runtime_identity;
 use super::{
     AuthorizedNode, NodeRegistry, RegisteredNode, RegistryError, RegistryResult,
-    RegistryTokenStatus, TOKEN_VERIFY_MAX_PARALLELISM, TOKEN_VERIFY_WAIT_WARN_AFTER,
+    RegistryTokenStatus, TOKEN_CACHE_TTL, TOKEN_VERIFY_MAX_PARALLELISM,
+    TOKEN_VERIFY_WAIT_WARN_AFTER, TokenCacheEntry,
 };
 
 impl NodeRegistry {
@@ -108,6 +110,31 @@ impl NodeRegistry {
     }
 
     async fn verify_hashed_token(&self, input: &str, token_hash: &str) -> RegistryResult<bool> {
+        // 构造缓存键:使用 token 的 SHA256 哈希 + registry_revision。
+        // 使用哈希避免在缓存中存储明文 token。
+        let cache_key_hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(input.as_bytes());
+            hasher.update(b"|");
+            hasher.update(token_hash.as_bytes());
+            hex::encode(hasher.finalize())
+        };
+        let cache_key = (cache_key_hash.clone(), self.registry_revision());
+
+        // 检查缓存（parking_lot::Mutex 是同步的）
+        {
+            let mut cache = self.token_cache.lock();
+            if let Some(entry) = cache.get(&cache_key) {
+                let age = entry.cached_at.elapsed();
+                if age < TOKEN_CACHE_TTL {
+                    return Ok(entry.verified);
+                }
+                // TTL 过期,移除旧条目
+                cache.pop(&cache_key);
+            }
+        }
+
+        // 缓存未命中,获取 semaphore 进行验证
         let wait_started = Instant::now();
         let permit = Arc::clone(&self.token_verify_limiter)
             .acquire_owned()
@@ -124,19 +151,45 @@ impl NodeRegistry {
             );
         }
 
+        // 获取 permit 后再次检查缓存（并发场景下可能已经被其他请求填充）
+        {
+            let mut cache = self.token_cache.lock();
+            if let Some(entry) = cache.get(&cache_key) {
+                let age = entry.cached_at.elapsed();
+                if age < TOKEN_CACHE_TTL {
+                    return Ok(entry.verified);
+                }
+            }
+        }
+
+        // 执行实际的 Argon2id 验证
         let input = input.to_string();
         let token_hash = token_hash.to_string();
         #[cfg(test)]
         let probe = self.token_verify_probe.clone();
 
-        tokio::task::spawn_blocking(move || {
+        let verified = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             #[cfg(test)]
             let _probe_guard = probe.as_ref().map(|probe| probe.enter());
             verify_token(&input, &token_hash)
         })
         .await
-        .map_err(|error| RegistryError::internal("token verify task failed", anyhow!(error)))
+        .map_err(|error| RegistryError::internal("token verify task failed", anyhow!(error)))?;
+
+        // 写入缓存
+        {
+            let mut cache = self.token_cache.lock();
+            cache.put(
+                cache_key,
+                TokenCacheEntry {
+                    verified,
+                    cached_at: Instant::now(),
+                },
+            );
+        }
+
+        Ok(verified)
     }
 
     #[cfg(test)]
@@ -191,6 +244,7 @@ fn token_material_matches(left: &RegisteredNode, right: &RegisteredNode) -> bool
 pub(super) struct TokenVerifyProbe {
     active: AtomicUsize,
     max_active: AtomicUsize,
+    total_entered: AtomicUsize,
     delay: Duration,
 }
 
@@ -200,6 +254,7 @@ impl TokenVerifyProbe {
         Self {
             active: AtomicUsize::new(0),
             max_active: AtomicUsize::new(0),
+            total_entered: AtomicUsize::new(0),
             delay,
         }
     }
@@ -208,7 +263,12 @@ impl TokenVerifyProbe {
         self.max_active.load(Ordering::SeqCst)
     }
 
+    pub(super) fn total_entered(&self) -> usize {
+        self.total_entered.load(Ordering::SeqCst)
+    }
+
     fn enter(&self) -> TokenVerifyProbeGuard<'_> {
+        self.total_entered.fetch_add(1, Ordering::SeqCst);
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.record_max_active(active);
         if !self.delay.is_zero() {

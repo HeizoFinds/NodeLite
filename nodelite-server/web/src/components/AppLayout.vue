@@ -21,16 +21,10 @@ type GeoIpAttribution = {
 
 const geoipAttribution = computed<GeoIpAttribution | null>(() => {
   const bootstrap = bootstrapStore.data;
-  if (!bootstrap?.geoip_enabled) return null;
-  if (bootstrap.geoip_provider === 'dbip') {
+  if (bootstrap?.geoip_enabled && bootstrap.geoip_provider === 'dbip') {
     return {
       label: 'IP geolocation by DB-IP',
       href: 'https://db-ip.com',
-    };
-  }
-  if (bootstrap.geoip_provider === 'custom') {
-    return {
-      label: 'GeoIP database: custom MMDB',
     };
   }
   return null;
@@ -136,7 +130,7 @@ const localeLabels: Record<SupportedLocale, string> = {
   color: var(--text-primary);
 }
 .main {
-  padding: 24px clamp(20px, 3vw, 36px) 40px;
+  padding: 24px clamp(20px, 2.5vw, 40px) 40px;
   max-width: 2560px;
   width: 100%;
 }
@@ -147,6 +141,9 @@ const localeLabels: Record<SupportedLocale, string> = {
   gap: 24px;
   margin-bottom: 22px;
 }
+.page-title {
+  min-width: 0;
+}
 .page-actions {
   display: flex;
   align-items: center;
@@ -156,14 +153,15 @@ const localeLabels: Record<SupportedLocale, string> = {
   background: var(--bg-card);
   color: var(--text-secondary);
   border: 1px solid var(--border-soft);
-  border-radius: 10px;
-  padding: 6px 10px;
-  font-size: 12px;
+  border-radius: 8px;
+  min-width: 104px;
+  padding: 8px 12px;
+  font-size: 13px;
 }
 .theme-toggle {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
   border: 1px solid var(--border-soft);
   background: var(--bg-card);
   color: var(--text-secondary);
@@ -176,6 +174,7 @@ const localeLabels: Record<SupportedLocale, string> = {
 .theme-toggle:hover {
   color: var(--text-primary);
   background: var(--bg-card-soft);
+  border-color: var(--border-strong);
 }
 .theme-toggle svg {
   width: 18px;
@@ -189,5 +188,19 @@ const localeLabels: Record<SupportedLocale, string> = {
 }
 .geoip-attribution a {
   color: inherit;
+}
+
+@media (max-width: 700px) {
+  .main {
+    padding: 18px 12px 32px;
+  }
+  .page-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .page-actions {
+    align-self: stretch;
+    justify-content: flex-start;
+  }
 }
 </style>

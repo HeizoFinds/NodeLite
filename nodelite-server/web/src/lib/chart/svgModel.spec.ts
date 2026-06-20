@@ -27,6 +27,16 @@ describe('buildAreaChart', () => {
     expect(model.timeTicks.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('renders a single numeric point as a horizontal line', () => {
+    const model = buildAreaChart(pts([42]), opts);
+    expect(model.empty).toBe(false);
+    expect(model.series[0]!.line).toContain(' L');
+    expect(model.series[0]!.points[0]!.x).toBeCloseTo(
+      model.padLeft + (model.width - model.padLeft - model.padRight) / 2,
+      5,
+    );
+  });
+
   it('positions the first point at padLeft and last at width-padRight', () => {
     const model = buildAreaChart(pts([10, 90]), opts);
     const s = model.series[0]!;
@@ -88,6 +98,22 @@ describe('buildMultiAreaChart', () => {
     }
   });
 
+  it('renders single-point multi-series as horizontal lines', () => {
+    const model = buildMultiAreaChart(
+      [
+        { label: 'down', color: 'var(--chart-network-down)', points: pts([100]) },
+        { label: 'up', color: 'var(--chart-network-up)', points: pts([10]) },
+      ],
+      opts,
+    );
+    expect(model.empty).toBe(false);
+    expect(model.series).toHaveLength(2);
+    for (const series of model.series) {
+      expect(series.line).toContain(' L');
+      expect(series.points).toHaveLength(1);
+    }
+  });
+
   it('uses compact rate-axis padding for narrow network cards', () => {
     const model = buildMultiAreaChart(
       [
@@ -97,5 +123,16 @@ describe('buildMultiAreaChart', () => {
       { ...opts, width: 380 },
     );
     expect(model.padLeft).toBe(62);
+  });
+
+  it('keeps fractional number grid labels distinct on small load ranges', () => {
+    const model = buildMultiAreaChart(
+      [{ label: '1m', color: 'var(--chart-load-one)', points: pts([0, 0.05, 0.1]) }],
+      { ...opts, valueKind: 'number', minValue: 0 },
+    );
+    const labels = model.grid.map((line) => line.label);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels).toContain('0.03');
+    expect(labels).toContain('0.10');
   });
 });

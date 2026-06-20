@@ -3,6 +3,7 @@ import { ref, type Ref } from 'vue';
 export type Theme = 'light' | 'dark';
 
 export const THEME_STORAGE_KEY = 'nodelite.ui.theme';
+const THEME_SWITCHING_CLASS = 'theme-switching';
 
 function readStoredTheme(): Theme {
   try {
@@ -13,7 +14,22 @@ function readStoredTheme(): Theme {
   }
 }
 
-function writeTheme(theme: Theme): void {
+function runAfterPaint(callback: () => void): void {
+  if (typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(callback));
+    return;
+  }
+  window.setTimeout(callback, 0);
+}
+
+function suppressThemeTransitions(): void {
+  const root = document.documentElement;
+  root.classList.add(THEME_SWITCHING_CLASS);
+  runAfterPaint(() => root.classList.remove(THEME_SWITCHING_CLASS));
+}
+
+function writeTheme(theme: Theme, suppressTransitions = false): void {
+  if (suppressTransitions) suppressThemeTransitions();
   document.documentElement.dataset.theme = theme;
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
@@ -39,6 +55,7 @@ function ensureRef(): Ref<Theme> {
  */
 export function setupTheme(): Theme {
   const theme = readStoredTheme();
+  document.documentElement.classList.remove(THEME_SWITCHING_CLASS);
   document.documentElement.dataset.theme = theme;
   ensureRef().value = theme;
   return theme;
@@ -50,7 +67,7 @@ export function useTheme(): { theme: Ref<Theme>; toggleTheme: () => void } {
   function toggleTheme(): void {
     const next: Theme = theme.value === 'light' ? 'dark' : 'light';
     theme.value = next;
-    writeTheme(next);
+    writeTheme(next, true);
   }
 
   return { theme, toggleTheme };

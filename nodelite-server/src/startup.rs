@@ -39,7 +39,8 @@ use crate::handlers::{
     enable_two_factor, healthz, index, install_agent_script, install_bootstrap, logout_and_reauth,
     metrics, node_detail, node_history, node_logs, node_status, nodes, overview, readyz,
     refresh_node_token, require_readonly_auth, server_update_log, settings, start_server_update,
-    start_two_factor_setup, static_asset, update_alert_settings, verify_2fa_api, verify_2fa_page,
+    start_two_factor_setup, static_asset, update_alert_settings, update_node_location_override,
+    update_node_service_metadata, verify_2fa_api, verify_2fa_page,
 };
 use crate::history::HistoryStore;
 use crate::registry::NodeRegistry;
@@ -146,6 +147,9 @@ async fn initialize_server_runtime(
     let readiness = ServerReadiness::new(history.is_available());
     readiness.mark_history_available(history.is_available());
     restore_snapshot_if_available(&shared, config.snapshot_path.as_path()).await;
+    shared
+        .apply_location_overrides(registry.list_location_overrides().await)
+        .await;
 
     let shutdown = CancellationToken::new();
     let state = AppState {
@@ -171,12 +175,17 @@ async fn initialize_server_runtime(
         ws_admission: WsAdmissionController::new(&config.ws),
         browser_ws_admission: WsAdmissionController::new(&config.ws),
         readonly_auth: Arc::new(RwLock::new(readonly_route_auth)),
-        alerting: Arc::new(RwLock::new(config.alerting.clone())),
+        alerting: Arc::new(RwLock::new(Arc::new(config.alerting.clone()))),
         two_factor_sessions: TwoFactorSessions::new(),
         config_path: Arc::new(config_path.to_path_buf()),
-        shutdown,
+        shutdown: shutdown.clone(),
     };
-    let background_tasks = spawn_server_background_tasks(&config, &state);
+    let mut background_tasks = spawn_server_background_tasks(&config, &state);
+    // 集中 diff 任务纳入 shutdown 生命周期
+    background_tasks.push(crate::state::spawn_browser_incremental_task(
+        state.shared.clone(),
+        shutdown,
+    ));
     log_registry_loaded(&config, &state.registry).await;
     let shutdown_artifacts = ShutdownArtifacts {
         shared: state.shared.clone(),
@@ -342,6 +351,14 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route(
             "/api/nodes/{node_id}/refresh-token",
             post(refresh_node_token),
+        )
+        .route(
+            "/api/nodes/{node_id}/service-meta",
+            post(update_node_service_metadata),
+        )
+        .route(
+            "/api/nodes/{node_id}/location-override",
+            post(update_node_location_override),
         )
         .route("/api/settings/password", post(change_readonly_password))
         .route("/api/settings/alerts", post(update_alert_settings))

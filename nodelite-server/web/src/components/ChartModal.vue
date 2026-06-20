@@ -27,7 +27,7 @@ const chartProps = computed(() => ({
   color: props.color ?? 'var(--accent-blue)',
   label: props.title,
   minValue: 0,
-  height: 360,
+  height: 260,
   clipSpikes: props.clipSpikes ?? true,
   ...(props.maxValue !== undefined ? { maxValue: props.maxValue } : {}),
   ...(props.points ? { points: props.points } : {}),
@@ -59,7 +59,7 @@ const chartProps = computed(() => ({
 .chart-modal {
   position: fixed;
   inset: 0;
-  background: rgba(2, 6, 16, 0.62);
+  background: rgba(0, 0, 0, 0.72);
   display: grid;
   place-items: center;
   padding: 24px;
@@ -68,15 +68,17 @@ const chartProps = computed(() => ({
 .chart-modal__panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 18px;
-  padding: 20px 22px;
-  width: min(960px, 100%);
+  border-radius: 12px;
+  padding: 16px 18px 18px;
+  width: min(820px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
 }
 .chart-modal__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 .chart-modal__title {
   margin: 0;

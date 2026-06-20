@@ -17,7 +17,7 @@ export interface BootstrapResponse {
   refresh_interval_secs: number;
   registered_nodes: number;
   geoip_enabled: boolean;
-  geoip_provider: 'dbip' | 'custom' | null;
+  geoip_provider: 'dbip' | 'ipwhois' | 'custom' | null;
 }
 
 /** GET /api/overview — nodelite-proto OverviewData */
@@ -53,6 +53,10 @@ export interface NodeListItem {
   geoip_city: string | null;
   geoip_latitude: number | null;
   geoip_longitude: number | null;
+  location_override_country: string | null;
+  location_override_city: string | null;
+  location_override_latitude: number | null;
+  location_override_longitude: number | null;
   snapshot: NodeListSnapshot | null;
   latency_ms: number | null;
   online: boolean;
@@ -63,10 +67,14 @@ export interface HistoryPoint {
   node_id: string;
   recorded_at: string;
   cpu_usage_percent: number | null;
+  load_one: number | null;
+  load_five: number | null;
+  load_fifteen: number | null;
   memory_used_percent: number;
   rx_bytes_per_sec: number | null;
   tx_bytes_per_sec: number | null;
   latency_ms: number | null;
+  packet_loss_percent: number | null;
   disk_used_percent: number | null;
 }
 
@@ -121,6 +129,7 @@ export interface NetworkCounters {
   total_tx_bytes: number;
   rx_bytes_per_sec: number | null;
   tx_bytes_per_sec: number | null;
+  packet_loss_percent: number | null;
 }
 
 export interface NodeSnapshot {
@@ -141,6 +150,10 @@ export interface NodeStatus {
   geoip_city: string | null;
   geoip_latitude: number | null;
   geoip_longitude: number | null;
+  location_override_country: string | null;
+  location_override_city: string | null;
+  location_override_latitude: number | null;
+  location_override_longitude: number | null;
   snapshot: NodeSnapshot | null;
   last_seen: string | null;
   latency_ms: number | null;
@@ -173,6 +186,14 @@ export interface SettingsUpdates {
   agent_upgrade_command: string;
 }
 
+/** GET /api/settings/update/server/log — recent server update output. */
+export interface ServerUpdateLogResponse {
+  exists: boolean;
+  offset: number;
+  next_offset: number;
+  text: string;
+}
+
 export interface SettingsAgentToken {
   node_id: string;
   node_label: string;
@@ -182,6 +203,17 @@ export interface SettingsAgentToken {
   tags: string[];
   token_expires_at: string | null;
   token_expires_in_secs: number | null;
+  service_expires_at: string | null;
+  service_unlimited: boolean;
+  renewal_price: string | null;
+  geoip_country: string | null;
+  geoip_city: string | null;
+  geoip_latitude: number | null;
+  geoip_longitude: number | null;
+  location_override_country: string | null;
+  location_override_city: string | null;
+  location_override_latitude: number | null;
+  location_override_longitude: number | null;
 }
 
 /** GET /api/settings — SettingsResponse (flat + nested) */
@@ -212,6 +244,21 @@ export interface SettingsActionResponse {
 export interface ReauthPayload {
   current_password?: string;
   code?: string;
+}
+
+/** POST /api/nodes/{id}/service-meta */
+export interface UpdateNodeServiceMetadataRequest {
+  service_expires_at: string | null;
+  service_unlimited: boolean;
+  renewal_price: string | null;
+}
+
+/** POST /api/nodes/{id}/location-override */
+export interface UpdateNodeLocationOverrideRequest {
+  country: string | null;
+  city: string | null;
+  latitude: number | null;
+  longitude: number | null;
 }
 
 /** GET /api/settings/2fa/start — TwoFactorSetupResponse */

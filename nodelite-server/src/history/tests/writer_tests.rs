@@ -71,10 +71,14 @@ async fn record_status_does_not_throttle_after_queue_full_drop() {
             node_id: format!("queued-{index}"),
             recorded_at: Utc::now(),
             cpu_usage_percent: Some(1.0),
+            load_one: Some(1.1),
+            load_five: Some(1.2),
+            load_fifteen: Some(1.3),
             memory_used_percent: 2.0,
             rx_bytes_per_sec: Some(3.0),
             tx_bytes_per_sec: Some(4.0),
             latency_ms: Some(5),
+            packet_loss_percent: Some(0.5),
             disk_used_percent: Some(6.0),
         })
         .expect("test channel should accept prefilled point");

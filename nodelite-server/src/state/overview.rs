@@ -118,6 +118,10 @@ mod tests {
             geoip_city: None,
             geoip_latitude: None,
             geoip_longitude: None,
+            location_override_country: None,
+            location_override_city: None,
+            location_override_latitude: None,
+            location_override_longitude: None,
             snapshot,
             last_seen: None,
             latency_ms,
@@ -153,6 +157,7 @@ mod tests {
                 total_tx_bytes,
                 rx_bytes_per_sec,
                 tx_bytes_per_sec,
+                packet_loss_percent: None,
             },
         }
     }

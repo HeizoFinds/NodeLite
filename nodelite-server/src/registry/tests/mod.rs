@@ -14,6 +14,7 @@ use super::{
 use nodelite_proto::NodeIdentity;
 
 mod authorize_tests;
+mod cache_tests;
 mod error_tests;
 mod migrate_tests;
 mod reload_tests;
@@ -36,6 +37,13 @@ fn legacy_node(
         tags: Vec::new(),
         created_at: Utc::now(),
         token_expires_at,
+        service_expires_at: None,
+        service_unlimited: false,
+        renewal_price: None,
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude_microdegrees: None,
+        location_override_longitude_microdegrees: None,
     }
 }
 
