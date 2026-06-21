@@ -26,7 +26,7 @@ const dots = computed(() => {
   });
 
   return nodesStore.nodes.map((node, i) => {
-    const { x, y } = positions[i];
+    const { x, y } = positions[i]!;
     const crowded = positions.some(
       (other, j) =>
         j !== i &&
