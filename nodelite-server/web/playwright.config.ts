@@ -4,14 +4,14 @@ import { defineConfig, devices } from '@playwright/test';
 // NODELITE_E2E_BASE_URL=http://localhost:8080 (legacy backend) for the
 // Stage 2/3 flows that need the real Rust API. Either backend handles
 // Basic Auth via NODELITE_E2E_USER/PASS below.
-const DEFAULT_BASE_URL = process.env.NODELITE_E2E_BASE_URL ?? 'http://localhost:5173';
+const DEFAULT_BASE_URL = process.env.NODELITE_E2E_BASE_URL ?? 'http://127.0.0.1:5173';
 
 export default defineConfig({
   testDir: './e2e',
   webServer: process.env.NODELITE_E2E_BASE_URL
     ? undefined
     : {
-        command: 'pnpm dev -- --host 127.0.0.1',
+        command: 'pnpm dev --host 127.0.0.1',
         url: DEFAULT_BASE_URL,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
