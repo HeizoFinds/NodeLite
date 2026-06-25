@@ -8,6 +8,14 @@ const DEFAULT_BASE_URL = process.env.NODELITE_E2E_BASE_URL ?? 'http://localhost:
 
 export default defineConfig({
   testDir: './e2e',
+  webServer: process.env.NODELITE_E2E_BASE_URL
+    ? undefined
+    : {
+        command: 'pnpm dev -- --host 127.0.0.1',
+        url: DEFAULT_BASE_URL,
+        reuseExistingServer: !process.env.CI,
+        timeout: 120_000,
+      },
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
