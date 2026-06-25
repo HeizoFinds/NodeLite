@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/XiNian-dada/NodeLite/actions/workflows/ci.yml/badge.svg)](https://github.com/XiNian-dada/NodeLite/actions/workflows/ci.yml)
 [![Coverage](https://github.com/XiNian-dada/NodeLite/actions/workflows/coverage.yml/badge.svg)](https://github.com/XiNian-dada/NodeLite/actions/workflows/coverage.yml)
+[![codecov](https://codecov.io/gh/XiNian-dada/NodeLite/branch/main/graph/badge.svg)](https://codecov.io/gh/XiNian-dada/NodeLite)
 
 # NodeLite
 
@@ -122,6 +123,8 @@ Prometheus 快速验证：
 ```bash
 curl -u viewer:secret https://monitor.example.com/metrics
 ```
+
+Prometheus 抓取示例和 Grafana Dashboard 见 `ops/prometheus/prometheus.yml` 与 `ops/grafana/nodelite-dashboard.json`。
 
 ## 当前能力
 
