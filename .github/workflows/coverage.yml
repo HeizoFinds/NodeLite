@@ -79,6 +79,12 @@ jobs:
           NODELITE_SKIP_WEB_BUILD: 1
         run: cargo tarpaulin --config tarpaulin.toml
 
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: target/tarpaulin/cobertura.xml
+          fail_ci_if_error: false
+
       - name: Upload HTML report as artifact
         if: always()
         uses: actions/upload-artifact@v4
