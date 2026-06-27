@@ -66,7 +66,10 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Shellcheck installers
-        run: shellcheck scripts/install-server.sh scripts/install-agent.sh
+        run: shellcheck scripts/install-server.sh scripts/install-agent.sh scripts/test-install-server-summary.sh
+
+      - name: Test installer summaries
+        run: sh scripts/test-install-server-summary.sh
 
       - name: Audit dependency advisories
         # 发布前之外,日常 CI 也要尽早暴露已知 RUSTSEC / yanked 依赖问题。
@@ -106,6 +109,49 @@ jobs:
         env:
           NODELITE_SKIP_WEB_BUILD: 1
         run: cargo test --workspace --locked
+
+  web-e2e:
+    name: Web E2E
+    runs-on: ubuntu-latest
+    needs: [web-lint-and-test]
+    defaults:
+      run:
+        working-directory: nodelite-server/web
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: nodelite-server/web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run Playwright E2E
+        run: pnpm e2e:ci
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            nodelite-server/web/playwright-report/
+            nodelite-server/web/test-results/
+          retention-days: 7
 
   web-lint-and-test:
     # 前端 Stage 0 守门:lint / typecheck / 单测 / 构建,以及 CSP 内联脚本守卫。

@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/XiNian-dada/NodeLite/actions/workflows/ci.yml/badge.svg)](https://github.com/XiNian-dada/NodeLite/actions/workflows/ci.yml)
 [![Coverage](https://github.com/XiNian-dada/NodeLite/actions/workflows/coverage.yml/badge.svg)](https://github.com/XiNian-dada/NodeLite/actions/workflows/coverage.yml)
+[![codecov](https://codecov.io/gh/XiNian-dada/NodeLite/branch/main/graph/badge.svg)](https://codecov.io/gh/XiNian-dada/NodeLite)
 
 # NodeLite
 
@@ -123,6 +124,8 @@ Prometheus 快速验证：
 curl -u viewer:secret https://monitor.example.com/metrics
 ```
 
+Prometheus 抓取示例和 Grafana Dashboard 见 `ops/prometheus/prometheus.yml` 与 `ops/grafana/nodelite-dashboard.json`。
+
 ## 当前能力
 
 - 一键安装 Server / Agent
@@ -201,6 +204,8 @@ node scripts/benchmark-index-dom.mjs --nodes 1000
 
 ## 发布
 
-仓库使用 tag 驱动 GitHub Release。推送语义化版本 tag 后，CI 会构建 Linux Server / Agent、macOS Agent，上传安装脚本和 `SHA256SUMS.txt`，并创建 Release。
+仓库使用 tag 驱动 GitHub Release。推送语义化版本 tag 后，CI 会构建 Linux Server / Agent、macOS Agent，上传安装脚本、`SHA256SUMS.txt` 和 CycloneDX SBOM，并创建 Release。
 
 发布产物中的 Agent 会把对应 tag 版本号上报到面板，便于确认线上节点版本。
+
+`nodelite-proto.cdx.json`、`nodelite-agent.cdx.json` 和 `nodelite-server.cdx.json` 是 CycloneDX JSON 格式的软件物料清单，覆盖 workspace crate 的依赖和版本信息。它们会随发布产物一起上传，并纳入 `SHA256SUMS.txt` 统一校验。
